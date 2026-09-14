@@ -1,0 +1,30 @@
+name: Design proposal
+description: Propose a bounded change to behavior or architecture.
+labels: [design]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Read the [principles](https://github.com/sulai-atelier/sulai/blob/main/docs/principles.md) and [roadmap](https://github.com/sulai-atelier/sulai/blob/main/ROADMAP.md).
+        A proposal is not an accepted decision. Use Discussions for open-ended questions.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem and scope
+      description: What concrete workflow needs to change? What is outside this proposal?
+    validations:
+      required: true
+  - type: textarea
+    id: approach
+    attributes:
+      label: Proposed approach and alternatives
+      description: Explain the tradeoffs and affected source, provenance, or acceptance boundaries.
+    validations:
+      required: true
+  - type: textarea
+    id: evaluation
+    attributes:
+      label: Evaluation and compatibility
+      description: How would we validate the result? Could existing data, identities, or APIs be affected?
+    validations:
+      required: true

@@ -1,0 +1,37 @@
+name: Importer request
+description: Describe a source format and its preservation requirements.
+labels: [enhancement, importer]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not upload real provider exports, attachments, or conversation histories.
+        Link public format documentation or describe a synthetic example. A request does not commit the project to an adapter.
+  - type: input
+    id: provider
+    attributes:
+      label: Provider and export format
+      description: Include export version or observation date when known.
+    validations:
+      required: true
+  - type: textarea
+    id: workflow
+    attributes:
+      label: Workflow and available documentation
+      description: What needs importing, and what public documentation describes the source?
+    validations:
+      required: true
+  - type: textarea
+    id: preservation
+    attributes:
+      label: Preservation requirements
+      description: Describe relevant files, attachments, edits, branches, metadata, and source-mapping constraints. Mark unknowns explicitly.
+    validations:
+      required: true
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Data check
+      options:
+        - label: This request contains no real conversation exports, credentials, or private project data.
+          required: true

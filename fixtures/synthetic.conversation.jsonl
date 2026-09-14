@@ -1,0 +1,4 @@
+{"format":"sulai.conversation.v1"}
+{"role":"user","content":"Synthetic project: a community seed library. Keep the original proposals."}
+{"role":"assistant","content":"Proposal: track seed varieties and borrowing dates. Assumption: one location."}
+{"role":"user","content":"Open question: should the catalogue support café workshops and 🌱 labels?"}

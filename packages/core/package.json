@@ -1,0 +1,25 @@
+{
+  "name": "@sulai/core",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Immutable source artifacts and exact source references for Sulai.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sulai-atelier/sulai.git",
+    "directory": "packages/core"
+  },
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=24.21.0 <25"
+  }
+}

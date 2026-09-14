@@ -1,0 +1,37 @@
+name: Bug report
+description: Report incorrect behavior with a minimal synthetic reproduction.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use synthetic data only. Do not attach real conversation exports or secrets.
+        For suspected vulnerabilities, follow [SECURITY.md](https://github.com/sulai-atelier/sulai/blob/main/SECURITY.md) instead.
+  - type: input
+    id: environment
+    attributes:
+      label: Revision and environment
+      description: Commit or version, operating system, Node.js version, and filesystem if relevant.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: Minimal synthetic input and exact commands or steps.
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Expected and actual behavior
+      description: Explain the difference. Review logs for private data before including them.
+    validations:
+      required: true
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Data check
+      options:
+        - label: This report contains no real conversation exports, credentials, or private project data.
+          required: true

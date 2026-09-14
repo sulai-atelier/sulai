@@ -1,0 +1,10 @@
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+.sulai/
+.tools/
+.tmp/
+.env
+.env.*
+!.env.example

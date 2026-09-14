@@ -1,0 +1,25 @@
+{
+  "name": "@sulai/cli",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Local initialization, source import, and inspection for Sulai.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sulai-atelier/sulai.git",
+    "directory": "packages/cli"
+  },
+  "license": "Apache-2.0",
+  "type": "module",
+  "bin": {
+    "sulai": "./dist/main.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=24.21.0 <25"
+  },
+  "dependencies": {
+    "@sulai/core": "0.0.0"
+  }
+}

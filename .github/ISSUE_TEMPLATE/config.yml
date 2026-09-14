@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions and technical discussion
+    url: https://github.com/sulai-atelier/sulai/discussions
+    about: Discuss workflows and exploratory ideas before proposing implementation work.
+  - name: Report a security concern privately
+    url: https://github.com/sulai-atelier/sulai/blob/main/SECURITY.md
+    about: Follow the private reporting instructions; do not disclose vulnerabilities in public issues.
+  - name: Report a conduct concern privately
+    url: https://github.com/sulai-atelier/sulai/blob/main/CODE_OF_CONDUCT.md
+    about: Use the confidential reporting contact in the Code of Conduct.
