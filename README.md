@@ -12,9 +12,11 @@ traceable, versioned project state. The project, not the chat, is the durable un
 ## Status
 
 Sulai is pre-alpha. The repository implements the source-preservation foundation:
-immutable content-addressed artifacts, byte-precise source references,
-integrity-checked local storage, and a small CLI for a synthetic conversation
-format. Provider imports and reconciliation are future work.
+immutable content-addressed artifacts, byte-precise source references, and
+format-independent integrity-checked local storage. Storage accepts exact bytes
+of any kind; reading them through a format is a separate, named operation, and
+the only reader today is a synthetic conversation format. Provider imports,
+import-occurrence provenance, and reconciliation are future work.
 
 The APIs and project format are evolving. This is not a production-ready release.
 
@@ -50,20 +52,30 @@ npm run cli -- import .tmp/example fixtures/synthetic.conversation.jsonl
 npm run cli -- inspect .tmp/example
 ```
 
-The import prints an artifact ID. To inspect its decoded messages, source units,
-and exact raw records, substitute that ID for `ARTIFACT_ID`:
+The import prints an artifact ID. `inspect` verifies stored identity without
+parsing anything. To read that artifact through the conversation format, and see
+its decoded messages, source units and exact raw records, substitute the ID for
+`ARTIFACT_ID`:
 
 ```sh
-npm run cli -- inspect .tmp/example ARTIFACT_ID
+npm run cli -- interpret .tmp/example ARTIFACT_ID
 ```
+
+**Import preserves; it does not interpret.** Storing exact bytes performs no
+format validation, so material that no current reader understands is still kept
+faithfully and a later reader can re-derive from the untouched original. That is
+why `interpret` is a separate command, and why it can fail on bytes that were
+stored successfully without affecting them. See
+[ADR 0003](docs/adr/0003-storage-is-independent-of-artifact-format.md).
 
 Commands emit JSON; failures go to stderr with exit code 1. Reimporting identical
 bytes reuses the artifact. Initialization and import never replace existing
 stored content. Inspection checks the stored content against its identity.
 
-Only [the synthetic fixture](fixtures/synthetic.conversation.jsonl) and the
-documented [conversation and storage format](docs/source-format.md) are supported.
-No data is sent to a model or external service by the CLI.
+Storage accepts any bytes. The only **interpreter** is the documented
+[synthetic conversation format](docs/source-format.md), exercised by
+[the synthetic fixture](fixtures/synthetic.conversation.jsonl). No data is sent to
+a model or external service by the CLI.
 
 ## Architecture and specifications
 

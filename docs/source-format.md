@@ -41,6 +41,13 @@ recompute identities and bounds against the supplied artifact and parent. The
 resolvers perform those checks too and return exact byte copies. TypeScript types
 alone are not the trust boundary.
 
+`Artifact.slice(startByte, endByte)` copies one half-open range and applies the
+same range rules as a source reference. Resolving a reference costs the size of
+the range rather than the size of the artifact, which matters once artifacts are
+whole provider exports rather than small fixtures. `Artifact.bytes()` still
+copies everything and should be used only when the whole artifact is genuinely
+needed.
+
 ## Synthetic conversation format
 
 Input is UTF-8 without a BOM. The first line has exactly one field:
@@ -91,21 +98,47 @@ Validation of the entire input precedes artifact publication.
 format marker written and validated by the CLI, not user-editable configuration:
 
 ```text
-{"format":"sulai.project","version":1,"artifactFormat":"sulai.conversation.v1"}
+{"format":"sulai.project","version":2}
 ```
 
-The marker's version describes the storage format. It is not an accepted project
-state version. No accepted state is recorded by this CLI.
+The marker describes the **storage** format and deliberately says nothing about
+the format of the artifacts inside, because an artifact is exact bytes of any
+kind. Version 1 embedded `artifactFormat`; version 1 projects are refused with a
+specific message, and this pre-alpha does not migrate them. The marker's version
+is not an accepted project state version. No accepted state is recorded by this
+CLI. See [ADR 0003](adr/0003-storage-is-independent-of-artifact-format.md).
+
+`.sulai/tmp` is ephemeral. It is recreated on demand, so its absence does not
+make a project invalid. Storage directories are created with mode `0700`, which
+POSIX systems enforce and Windows ignores.
 
 Imports write and sync a temporary file, close it, and publish a hard link under
 the artifact digest. Linking fails if that name exists, so concurrent identical
 imports converge on one complete file. Existing bytes are compared exactly before
 reporting an import as already present. Temporary names are random but are never
-part of an artifact or source identity. Cleanup retries transient `EBUSY` file
-locks up to three times. Normal completion removes temporary files. A persistent
-cleanup failure returns an error even if the artifact has already been published;
-inspection can confirm its presence, and reimport remains idempotent.
+part of an artifact or source identity. Cleanup treats `EBUSY`, `EPERM` and
+`EACCES` as transient and retries up to three times, because Windows reports a
+locked file differently depending on which component holds it; `ENOENT` means the
+file is already gone and is success. Normal completion removes temporary files. A
+persistent cleanup failure returns an error even if the artifact has already been
+published; inspection can confirm its presence, and reimport remains idempotent.
 If publication and cleanup both fail, the returned error retains both causes.
+
+## Preservation and interpretation are separate operations
+
+`import` stores exact bytes and performs no format validation at all. Material
+that no current reader understands is preserved faithfully, so a later reader can
+re-derive from the untouched original rather than requiring a fresh import.
+
+`inspect` verifies that every stored artifact still hashes to the name it is
+stored under. It parses nothing.
+
+`interpret` reads one artifact through one specific format. It may fail on bytes
+that were stored successfully, and that failure leaves the artifact untouched.
+
+The storage read ceiling is a local-store policy distinct from any format limit.
+Reads are fully buffered, so it bounds memory rather than expressing a real
+capability; provider exports beyond it need streaming identity first.
 
 There is no mutable artifact index: inspection enumerates sorted artifact names,
 checks their hashes, and reconstructs the parser view from the original bytes.

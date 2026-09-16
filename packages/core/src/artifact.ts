@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { ValidationError } from './validation.js';
+import { byteRange, ValidationError } from './validation.js';
 
 export type ArtifactId = `sha256:${string}`;
 
@@ -34,5 +34,15 @@ export class Artifact {
 
   bytes(): Uint8Array {
     return this.#content.slice();
+  }
+
+  /**
+   * Copies one half-open byte range. Unlike `bytes()`, this never materializes
+   * the whole artifact, so resolving a reference into a large artifact costs
+   * the size of the range rather than the size of the artifact.
+   */
+  slice(startByte: unknown, endByte: unknown): Uint8Array {
+    const range = byteRange(startByte, endByte, 0, this.byteLength);
+    return this.#content.slice(range.startByte, range.endByte);
   }
 }

@@ -107,7 +107,7 @@ export function resolveSourceUnit(
   value: unknown,
 ): Uint8Array {
   const unit = parseSourceUnit(value, artifact);
-  return artifact.bytes().slice(unit.startByte, unit.endByte);
+  return artifact.slice(unit.startByte, unit.endByte);
 }
 
 export function resolveSourceSpan(
@@ -117,5 +117,5 @@ export function resolveSourceSpan(
 ): Uint8Array {
   const unit = parseSourceUnit(sourceUnit, artifact);
   const span = parseSourceSpan(value, artifact, unit);
-  return artifact.bytes().slice(span.startByte, span.endByte);
+  return artifact.slice(span.startByte, span.endByte);
 }

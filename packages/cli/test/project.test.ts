@@ -16,16 +16,14 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import type { TestContext } from 'node:test';
+import { importConversation, ValidationError } from '@sulai/core';
 import {
-  MAX_CONVERSATION_BYTES,
-  importConversation,
-  ValidationError,
-} from '@sulai/core';
-import {
-  importConversationFile,
+  MAX_ARTIFACT_BYTES,
+  importArtifactFile,
   initializeProject,
   inspectArtifact,
   inspectProject,
+  interpretConversation,
 } from '../dist/project.js';
 
 const fixture = fileURLToPath(
@@ -48,6 +46,28 @@ function storedFile(directory: string, id: string) {
   );
 }
 
+async function temporaryEntries(directory: string) {
+  try {
+    return await readdir(join(directory, '.sulai', 'tmp'));
+  } catch {
+    return [];
+  }
+}
+
+test('the project marker is an exact, independently specified byte sequence', async (t) => {
+  const directory = await temporary(t);
+  await initializeProject(directory);
+  const marker = await readFile(join(directory, '.sulai', 'project.json'));
+  // Written out independently of the implementation so a silent format change
+  // fails here. The marker describes the storage format only; it deliberately
+  // carries no artifact format.
+  assert.equal(
+    marker.toString('utf8'),
+    '{"format":"sulai.project","version":2}\n',
+  );
+  assert.equal(marker.byteLength, 39);
+});
+
 test('initialization and repeated imports are idempotent and preserve bytes exactly', async (t) => {
   const directory = await temporary(t);
   assert.equal((await initializeProject(directory)).created, true);
@@ -57,8 +77,8 @@ test('initialization and repeated imports are idempotent and preserve bytes exac
     await readFile(join(directory, '.sulai', 'project.json')),
     marker,
   );
-  const first = await importConversationFile(directory, fixture);
-  const second = await importConversationFile(directory, fixture);
+  const first = await importArtifactFile(directory, fixture);
+  const second = await importArtifactFile(directory, fixture);
   assert.equal(first.created, true);
   assert.deepEqual(second, { ...first, created: false });
   assert.deepEqual(
@@ -66,35 +86,153 @@ test('initialization and repeated imports are idempotent and preserve bytes exac
     await readFile(fixture),
   );
   assert.equal((await inspectProject(directory)).artifacts.length, 1);
-  assert.deepEqual(await readdir(join(directory, '.sulai', 'tmp')), []);
+  assert.deepEqual(await temporaryEntries(directory), []);
+});
+
+test('storage accepts arbitrary bytes and never interprets them', async (t) => {
+  const directory = await temporary(t);
+  await initializeProject(directory);
+  const filename = join(directory, 'arbitrary.bin');
+  // Not a conversation, not text, not valid UTF-8.
+  const raw = Buffer.from([0x00, 0xff, 0xfe, 0x50, 0x4b, 0x03, 0x04, 0x80]);
+  await writeFile(filename, raw);
+  const imported = await importArtifactFile(directory, filename);
+  assert.equal(imported.created, true);
+  assert.equal(imported.byteLength, raw.byteLength);
+  assert.deepEqual(await readFile(storedFile(directory, imported.id)), raw);
+  // Generic inspection proves integrity without any format knowledge.
+  const inspection = await inspectProject(directory);
+  assert.deepEqual(inspection.artifacts, [
+    { id: imported.id, byteLength: raw.byteLength },
+  ]);
+  assert.equal(inspection.version, 2);
+});
+
+test('preserve first, interpret second: unreadable material is stored and survives a failed interpretation', async (t) => {
+  const directory = await temporary(t);
+  await initializeProject(directory);
+  const filename = join(directory, 'not-a-conversation.jsonl');
+  const raw = Buffer.from('this is not the synthetic conversation format');
+  await writeFile(filename, raw);
+  // Import succeeds: preservation does not depend on understanding.
+  const imported = await importArtifactFile(directory, filename);
+  assert.equal(imported.created, true);
+  // Interpretation fails, because today's only reader cannot read it.
+  await assert.rejects(
+    interpretConversation(directory, imported.id),
+    ValidationError,
+  );
+  // The bytes are untouched, so a better reader later can re-derive from them
+  // without the user importing again.
+  assert.deepEqual(await readFile(storedFile(directory, imported.id)), raw);
+  assert.deepEqual((await inspectProject(directory)).artifacts, [
+    { id: imported.id, byteLength: raw.byteLength },
+  ]);
+});
+
+test('interpretation reconstructs messages and source references after relocation', async (t) => {
+  const directory = await temporary(t);
+  const originalProject = join(directory, 'original');
+  const relocatedProject = join(directory, 'relocated');
+  await initializeProject(originalProject);
+  const imported = await importArtifactFile(originalProject, fixture);
+  const expected = await interpretConversation(originalProject, imported.id);
+  await rename(originalProject, relocatedProject);
+  assert.deepEqual(
+    await interpretConversation(relocatedProject, imported.id),
+    expected,
+  );
+  assert.equal(expected.messageCount, 3);
+  assert.equal(expected.messages.length, 3);
+  const raw = await readFile(fixture);
+  for (const message of expected.messages) {
+    assert.equal(
+      message.rawSource,
+      raw
+        .subarray(message.sourceUnit.startByte, message.sourceUnit.endByte)
+        .toString('utf8'),
+    );
+    assert.equal(message.sourceUnit.artifactId, imported.id);
+  }
+});
+
+test('generic inspection reports identity and size without interpreting', async (t) => {
+  const directory = await temporary(t);
+  await initializeProject(directory);
+  const imported = await importArtifactFile(directory, fixture);
+  const inspected = await inspectArtifact(directory, imported.id);
+  assert.deepEqual(inspected, {
+    id: imported.id,
+    byteLength: imported.byteLength,
+  });
+  assert.equal(Object.hasOwn(inspected, 'messages'), false);
+  assert.equal(Object.hasOwn(inspected, 'format'), false);
+});
+
+test('an absent temporary directory does not invalidate a project', async (t) => {
+  const directory = await temporary(t);
+  await initializeProject(directory);
+  // `.sulai/tmp` is ephemeral and re-created on demand.
+  await rm(join(directory, '.sulai', 'tmp'), { recursive: true });
+  assert.deepEqual((await inspectProject(directory)).artifacts, []);
+  const imported = await importArtifactFile(directory, fixture);
+  assert.equal(imported.created, true);
+  assert.deepEqual(await temporaryEntries(directory), []);
 });
 
 test('concurrent identical imports publish one complete artifact', async (t) => {
   const directory = await temporary(t);
   await initializeProject(directory);
   const results = await Promise.all(
-    Array.from({ length: 4 }, () => importConversationFile(directory, fixture)),
+    Array.from({ length: 4 }, () => importArtifactFile(directory, fixture)),
   );
   assert.equal(results.filter((result) => result.created).length, 1);
   const inspection = await inspectProject(directory);
   assert.equal(inspection.artifacts.length, 1);
-  assert.deepEqual(await readdir(join(directory, '.sulai', 'tmp')), []);
+  assert.deepEqual(await temporaryEntries(directory), []);
 });
 
-test('transient temporary-file locks are retried after publishing complete bytes', async (t) => {
+test('every transient lock class is retried after publishing complete bytes', async (t) => {
+  for (const code of ['EBUSY', 'EPERM', 'EACCES']) {
+    const directory = await temporary(t);
+    await initializeProject(directory);
+    const originalUnlink = fs.unlink;
+    let attempts = 0;
+    const mockedUnlink = t.mock.method(
+      fs,
+      'unlink',
+      async (filename: Parameters<typeof fs.unlink>[0]) => {
+        attempts += 1;
+        if (attempts <= 2)
+          throw Object.assign(new Error('Synthetic temporary lock'), { code });
+        return originalUnlink(filename);
+      },
+    );
+    syncBuiltinESMExports();
+    const imported = await importArtifactFile(directory, fixture);
+    mockedUnlink.mock.restore();
+    syncBuiltinESMExports();
+    assert.equal(imported.created, true, code);
+    assert.equal(attempts, 3, code);
+    assert.deepEqual(
+      await readFile(storedFile(directory, imported.id)),
+      await readFile(fixture),
+    );
+  }
+});
+
+test('an already-removed temporary file is not an error', async (t) => {
   const directory = await temporary(t);
   await initializeProject(directory);
   const originalUnlink = fs.unlink;
-  let attempts = 0;
+  let sawEnoent = false;
   const mockedUnlink = t.mock.method(
     fs,
     'unlink',
     async (filename: Parameters<typeof fs.unlink>[0]) => {
-      attempts += 1;
-      if (attempts <= 2)
-        throw Object.assign(new Error('Synthetic temporary lock'), {
-          code: 'EBUSY',
-        });
+      await originalUnlink(filename);
+      sawEnoent = true;
+      // A second removal of the same path is what a racing cleaner would cause.
       return originalUnlink(filename);
     },
   );
@@ -103,14 +241,9 @@ test('transient temporary-file locks are retried after publishing complete bytes
     mockedUnlink.mock.restore();
     syncBuiltinESMExports();
   });
-  const imported = await importConversationFile(directory, fixture);
+  const imported = await importArtifactFile(directory, fixture);
   assert.equal(imported.created, true);
-  assert.equal(attempts, 3);
-  assert.deepEqual(
-    await readFile(storedFile(directory, imported.id)),
-    await readFile(fixture),
-  );
-  assert.deepEqual(await readdir(join(directory, '.sulai', 'tmp')), []);
+  assert.equal(sawEnoent, true);
 });
 
 test('persistent temporary-file locks fail after bounded retries without losing the artifact', async (t) => {
@@ -128,7 +261,7 @@ test('persistent temporary-file locks fail after bounded retries without losing 
     mockedUnlink.mock.restore();
     syncBuiltinESMExports();
   });
-  await assert.rejects(importConversationFile(directory, fixture), {
+  await assert.rejects(importArtifactFile(directory, fixture), {
     code: 'EBUSY',
   });
   assert.equal(attempts, 4);
@@ -145,10 +278,10 @@ test('publication and cleanup failures retain both errors', async (t) => {
   await initializeProject(directory);
   const publicationError = Object.assign(
     new Error('Synthetic publication failure'),
-    { code: 'EACCES' },
+    { code: 'ENOSPC' },
   );
   const cleanupError = Object.assign(new Error('Synthetic cleanup failure'), {
-    code: 'EPERM',
+    code: 'EROFS',
   });
   const mockedLink = t.mock.method(fs, 'link', async () => {
     throw publicationError;
@@ -163,7 +296,7 @@ test('publication and cleanup failures retain both errors', async (t) => {
     syncBuiltinESMExports();
   });
   await assert.rejects(
-    importConversationFile(directory, fixture),
+    importArtifactFile(directory, fixture),
     (error: unknown) => {
       assert.ok(error instanceof AggregateError);
       assert.deepEqual(error.errors, [publicationError, cleanupError]);
@@ -174,31 +307,6 @@ test('publication and cleanup failures retain both errors', async (t) => {
   assert.deepEqual((await inspectProject(directory)).artifacts, []);
 });
 
-test('inspection reconstructs messages and source references after relocation', async (t) => {
-  const directory = await temporary(t);
-  const originalProject = join(directory, 'original');
-  const relocatedProject = join(directory, 'relocated');
-  await initializeProject(originalProject);
-  const imported = await importConversationFile(originalProject, fixture);
-  const expected = await inspectArtifact(originalProject, imported.id);
-  await rename(originalProject, relocatedProject);
-  assert.deepEqual(
-    await inspectArtifact(relocatedProject, imported.id),
-    expected,
-  );
-  assert.equal(expected.messages.length, 3);
-  const raw = await readFile(fixture);
-  for (const message of expected.messages) {
-    assert.equal(
-      message.rawSource,
-      raw
-        .subarray(message.sourceUnit.startByte, message.sourceUnit.endByte)
-        .toString('utf8'),
-    );
-    assert.equal(message.sourceUnit.artifactId, imported.id);
-  }
-});
-
 test('the filesystem round trip preserves CRLF, whitespace, Unicode, and no final newline', async (t) => {
   const directory = await temporary(t);
   await initializeProject(directory);
@@ -207,28 +315,23 @@ test('the filesystem round trip preserves CRLF, whitespace, Unicode, and no fina
   );
   const filename = join(directory, 'synthetic.jsonl');
   await writeFile(filename, raw);
-  const imported = await importConversationFile(directory, filename);
+  const imported = await importArtifactFile(directory, filename);
   assert.deepEqual(await readFile(storedFile(directory, imported.id)), raw);
 });
 
-test('malformed and oversized external files leave no artifact or temporary files', async (t) => {
+test('oversized files and directories leave no artifact or temporary files', async (t) => {
   const directory = await temporary(t);
   await initializeProject(directory);
-  const filename = join(directory, 'invalid.jsonl');
-  for (const bytes of [
-    Buffer.from('not JSON'),
-    Buffer.alloc(MAX_CONVERSATION_BYTES + 1),
-  ]) {
-    await writeFile(filename, bytes);
-    await assert.rejects(
-      importConversationFile(directory, filename),
-      ValidationError,
-    );
-    assert.deepEqual((await inspectProject(directory)).artifacts, []);
-    assert.deepEqual(await readdir(join(directory, '.sulai', 'tmp')), []);
-  }
+  const filename = join(directory, 'oversize.bin');
+  await writeFile(filename, Buffer.alloc(MAX_ARTIFACT_BYTES + 1));
   await assert.rejects(
-    importConversationFile(directory, directory),
+    importArtifactFile(directory, filename),
+    ValidationError,
+  );
+  assert.deepEqual((await inspectProject(directory)).artifacts, []);
+  assert.deepEqual(await temporaryEntries(directory), []);
+  await assert.rejects(
+    importArtifactFile(directory, directory),
     ValidationError,
   );
 });
@@ -236,10 +339,8 @@ test('malformed and oversized external files leave no artifact or temporary file
 test('corruption is detected and re-import never replaces the damaged file', async (t) => {
   const directory = await temporary(t);
   await initializeProject(directory);
-  const imported = await importConversationFile(directory, fixture);
-  const damaged = Buffer.from(
-    '{"format":"sulai.conversation.v1"}\n{"role":"user","content":"different synthetic content"}\n',
-  );
+  const imported = await importArtifactFile(directory, fixture);
+  const damaged = Buffer.from('different synthetic content');
   const destination = storedFile(directory, imported.id);
   await writeFile(destination, damaged);
   await assert.rejects(
@@ -248,11 +349,11 @@ test('corruption is detected and re-import never replaces the damaged file', asy
   );
   await assert.rejects(inspectProject(directory), /hash does not match/);
   await assert.rejects(
-    importConversationFile(directory, fixture),
+    importArtifactFile(directory, fixture),
     /refusing to overwrite/,
   );
   assert.deepEqual(await readFile(destination), damaged);
-  assert.deepEqual(await readdir(join(directory, '.sulai', 'tmp')), []);
+  assert.deepEqual(await temporaryEntries(directory), []);
 });
 
 test('invalid IDs, metadata, and unexpected store entries are rejected', async (t) => {
@@ -265,22 +366,40 @@ test('invalid IDs, metadata, and unexpected store entries are rejected', async (
   const unknown = join(directory, '.sulai', 'artifacts', 'unknown');
   await writeFile(unknown, 'synthetic');
   await assert.rejects(inspectProject(directory), /Unexpected entry/);
+  await rm(unknown);
   const marker = join(directory, '.sulai', 'project.json');
   await writeFile(marker, '{"format":"sulai.project","version":999}');
-  await assert.rejects(
-    inspectProject(directory),
-    /unsupported project metadata/,
-  );
+  await assert.rejects(inspectProject(directory), /storage format version 999/);
   await assert.rejects(initializeProject(directory), ValidationError);
   assert.equal(
     await readFile(marker, 'utf8'),
     '{"format":"sulai.project","version":999}',
   );
+  await writeFile(marker, 'not json at all');
+  await assert.rejects(
+    inspectProject(directory),
+    /unsupported project metadata/,
+  );
+});
+
+test('a version 1 project is refused with a specific, actionable message', async (t) => {
+  const directory = await temporary(t);
+  await initializeProject(directory);
+  const marker = join(directory, '.sulai', 'project.json');
+  // Exactly what version 1 wrote, including the artifact format it embedded.
+  await writeFile(
+    marker,
+    '{"format":"sulai.project","version":1,"artifactFormat":"sulai.conversation.v1"}\n',
+  );
+  await assert.rejects(
+    inspectProject(directory),
+    /storage format version 1.*requires version 2.*does not migrate/s,
+  );
 });
 
 test('import requires initialization and does not implicitly create storage', async (t) => {
   const directory = await temporary(t);
-  await assert.rejects(importConversationFile(directory, fixture), {
+  await assert.rejects(importArtifactFile(directory, fixture), {
     code: 'ENOENT',
   });
   assert.deepEqual(await readdir(directory), []);
@@ -300,13 +419,13 @@ test('storage directories cannot be redirected through symbolic links or junctio
     process.platform === 'win32' ? 'junction' : 'dir',
   );
   await assert.rejects(
-    importConversationFile(project, fixture),
+    importArtifactFile(project, fixture),
     /regular directories/,
   );
   assert.deepEqual((await inspectProject(outside)).artifacts, []);
 });
 
-test('CLI initializes, imports, lists, and inspects the synthetic fixture in separate processes', async (t) => {
+test('CLI initializes, imports, inspects, and interprets in separate processes', async (t) => {
   const directory = join(await temporary(t), 'project with spaces');
   function run(args: string[]) {
     const result = spawnSync(process.execPath, [cli, ...args], {
@@ -319,19 +438,22 @@ test('CLI initializes, imports, lists, and inspects the synthetic fixture in sep
   }
   assert.deepEqual(run(['init', directory]), { directory, created: true });
   const artifact = importConversation(await readFile(fixture)).artifact;
-  const summary = {
-    id: artifact.id,
-    byteLength: artifact.byteLength,
-    messageCount: 3,
-  };
+  const summary = { id: artifact.id, byteLength: artifact.byteLength };
   assert.deepEqual(run(['import', directory, fixture]), {
     ...summary,
     created: true,
   });
-  assert.deepEqual(run(['inspect', directory]), { artifacts: [summary] });
+  assert.deepEqual(run(['inspect', directory]), {
+    format: 'sulai.project',
+    version: 2,
+    artifacts: [summary],
+  });
+  assert.deepEqual(run(['inspect', directory, artifact.id]), summary);
   assert.deepEqual(
-    run(['inspect', directory, artifact.id]),
-    await inspectArtifact(directory, artifact.id),
+    run(['interpret', directory, artifact.id]),
+    JSON.parse(
+      JSON.stringify(await interpretConversation(directory, artifact.id)),
+    ) as unknown,
   );
 });
 
@@ -347,6 +469,7 @@ test('CLI help and invalid arguments have deliberate exit status and output', ()
     ['init'],
     ['import', 'directory'],
     ['inspect', '.', 'id', 'extra'],
+    ['interpret', 'directory'],
   ]) {
     const result = spawnSync(process.execPath, [cli, ...args], {
       encoding: 'utf8',
@@ -358,19 +481,22 @@ test('CLI help and invalid arguments have deliberate exit status and output', ()
   }
 });
 
-test('CLI rejects invalid imports without echoing source content', async (t) => {
+test('CLI rejects unreadable interpretation without echoing source content', async (t) => {
   const directory = await temporary(t);
   await initializeProject(directory);
   const filename = join(directory, 'invalid.jsonl');
   await writeFile(filename, 'SYNTHETIC_PRIVATE_MARKER');
+  // Import now succeeds, because preservation does not require understanding.
+  const imported = await importArtifactFile(directory, filename);
   const result = spawnSync(
     process.execPath,
-    [cli, 'import', directory, filename],
+    [cli, 'interpret', directory, imported.id],
     { encoding: 'utf8' },
   );
   assert.ifError(result.error);
   assert.equal(result.status, 1);
   assert.equal(result.stdout, '');
   assert.doesNotMatch(result.stderr, /SYNTHETIC_PRIVATE_MARKER/);
-  assert.deepEqual((await inspectProject(directory)).artifacts, []);
+  // The artifact is still there and still exact.
+  assert.equal((await inspectProject(directory)).artifacts.length, 1);
 });

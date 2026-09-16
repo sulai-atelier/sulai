@@ -74,3 +74,43 @@ test('artifact IDs reject trailing line terminators', () => {
     assert.throws(() => parseArtifactId(id + ending), ValidationError);
   }
 });
+
+test('slice copies exactly one half-open range and isolates the caller', () => {
+  const artifact = new Artifact(new Uint8Array([0, 255, 128, 13, 10]));
+  assert.deepEqual(artifact.slice(0, 5), new Uint8Array([0, 255, 128, 13, 10]));
+  assert.deepEqual(artifact.slice(1, 3), new Uint8Array([255, 128]));
+  assert.deepEqual(artifact.slice(4, 5), new Uint8Array([10]));
+  // Half-open: the upper bound is excluded.
+  assert.equal(artifact.slice(0, 1).byteLength, 1);
+  // Mutating a slice cannot reach the artifact.
+  artifact.slice(0, 5).fill(7);
+  assert.deepEqual(artifact.bytes(), new Uint8Array([0, 255, 128, 13, 10]));
+});
+
+test('slice enforces the same range rules as source references', () => {
+  const artifact = new Artifact(Buffer.from('abcdef'));
+  for (const [start, end] of [
+    [0, 0], // empty
+    [3, 3], // empty
+    [4, 2], // inverted
+    [-1, 3], // below the artifact
+    [0, 7], // beyond the artifact
+    [0.5, 3], // fractional
+    [0, 3.5], // fractional
+  ]) {
+    assert.throws(() => artifact.slice(start, end), ValidationError);
+  }
+  for (const value of [null, undefined, '2', {}, NaN, Infinity]) {
+    assert.throws(() => artifact.slice(value, 3), ValidationError);
+    assert.throws(() => artifact.slice(0, value), ValidationError);
+  }
+});
+
+test('slice does not materialize the whole artifact', () => {
+  // A range read must cost the size of the range, not the size of the artifact,
+  // or resolving one reference inside a real export becomes unusable.
+  const artifact = new Artifact(new Uint8Array(8 * 1024 * 1024));
+  const range = artifact.slice(10, 20);
+  assert.equal(range.byteLength, 10);
+  assert.equal(artifact.byteLength, 8 * 1024 * 1024);
+});
