@@ -106,9 +106,10 @@ test('slice enforces the same range rules as source references', () => {
   }
 });
 
-test('slice does not materialize the whole artifact', () => {
-  // A range read must cost the size of the range, not the size of the artifact,
-  // or resolving one reference inside a real export becomes unusable.
+test('slice returns only the requested range from a large artifact', () => {
+  // This asserts the result, not the allocation behaviour. The invariant that
+  // resolution never materializes the whole artifact is locked in
+  // source.test.ts by asserting that the resolvers never call bytes().
   const artifact = new Artifact(new Uint8Array(8 * 1024 * 1024));
   const range = artifact.slice(10, 20);
   assert.equal(range.byteLength, 10);

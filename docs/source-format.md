@@ -79,9 +79,13 @@ source bytes even though it decodes to `a`. This importer does not map arbitrary
 decoded substrings back through JSON escapes. A caller can cite the full message
 unit or explicitly select a byte span from its raw record.
 
-Files are limited to 1 MiB (1,048,576 bytes) and 10,000 messages. The CLI accepts
-regular files and performs bounded reads; the core also checks size and count.
-Validation of the entire input precedes artifact publication.
+This format is limited to 1 MiB (1,048,576 bytes) and 10,000 messages. The whole
+input is validated before any message is returned.
+
+These are limits on **interpretation**, not on storage. An artifact larger than
+1 MiB can be stored successfully and then be refused by this interpreter, because
+the storage ceiling is a separate, much larger local-store policy. Validation no
+longer precedes artifact publication: publication does not validate at all.
 
 ## Local storage
 
@@ -140,11 +144,14 @@ The storage read ceiling is a local-store policy distinct from any format limit.
 Reads are fully buffered, so it bounds memory rather than expressing a real
 capability; provider exports beyond it need streaming identity first.
 
-There is no mutable artifact index: inspection enumerates sorted artifact names,
-checks their hashes, and reconstructs the parser view from the original bytes.
-An unexpected store entry or a corrupt artifact causes inspection to fail. To
-move a project, copy the entire `.sulai` directory, including empty directories,
-while imports are stopped. Stored records contain no absolute paths.
+There is no mutable artifact index: inspection enumerates sorted artifact names
+and checks their hashes. It parses nothing and reconstructs no parser view, so a
+store holding material that no reader understands still verifies cleanly. An
+unexpected store entry or a corrupt artifact causes inspection to fail. Reads size
+their buffer from the file's observed size and refuse a file that changes size
+mid-read, since content addressing cannot describe a torn view. To move a project,
+copy the entire `.sulai` directory while imports are stopped; `.sulai/tmp` is
+ephemeral and need not be copied. Stored records contain no absolute paths.
 
 This protocol requires local hard-link support (for example NTFS, APFS, or ext4)
 and fails if it is unavailable; there is no fallback that overwrites data. It does

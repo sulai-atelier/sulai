@@ -21,9 +21,15 @@ making changes. Apply those rules to code, documentation, issues, and commits.
 - Keep docs, names, comments, and commits concise and suitable for public review.
   Do not put private planning or conversations in the repository. Record accepted
   architectural decisions in ADRs, not unresolved research. Avoid speculative abstractions.
-- Scope this foundation to source artifacts, references, and local import/inspect.
-  Semantic extraction, reconciliation, accepted state, and hosted features need
-  separate designs and requests. Do not silently expand scope.
+- Scope this foundation to source artifacts, references, and local
+  import/inspect/interpret. Semantic extraction, reconciliation, accepted state,
+  and hosted features need separate designs and requests. Do not silently expand
+  scope.
+- Storage never depends on an artifact format. Import preserves exact bytes and
+  validates nothing; inspection verifies identity and parses nothing;
+  interpretation is separate and may fail without affecting what was preserved.
+  Do not reintroduce format knowledge into the storage or identity layer. See
+  [ADR 0003](docs/adr/0003-storage-is-independent-of-artifact-format.md).
 - Before handoff, run `npm run format`, `npm run lint`, `npm run typecheck`, and
   `npm test`; inspect the diff and report results and remaining limitations.
 - Do not describe this foundation as production-ready. Keep commits focused when

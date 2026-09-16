@@ -391,10 +391,73 @@ test('a version 1 project is refused with a specific, actionable message', async
     marker,
     '{"format":"sulai.project","version":1,"artifactFormat":"sulai.conversation.v1"}\n',
   );
+  const specific =
+    /storage format version 1.*requires version 2.*does not migrate/s;
+  await assert.rejects(inspectProject(directory), specific);
+  // Every entry point must name the version. `init` previously reached the
+  // publish path first and reported a byte-count mismatch, which tells the user
+  // nothing about why their project is refused.
+  await assert.rejects(initializeProject(directory), specific);
+  await assert.rejects(importArtifactFile(directory, fixture), specific);
   await assert.rejects(
-    inspectProject(directory),
-    /storage format version 1.*requires version 2.*does not migrate/s,
+    interpretConversation(directory, 'sha256:' + 'a'.repeat(64)),
+    specific,
   );
+  const result = spawnSync(process.execPath, [cli, 'init', directory], {
+    encoding: 'utf8',
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, specific);
+  // The incompatible marker is never overwritten.
+  assert.equal(
+    await readFile(marker, 'utf8'),
+    '{"format":"sulai.project","version":1,"artifactFormat":"sulai.conversation.v1"}\n',
+  );
+});
+
+test('a file that changes size while being read is refused rather than hashed', async (t) => {
+  const directory = await temporary(t);
+  await initializeProject(directory);
+  const filename = join(directory, 'growing.bin');
+  await writeFile(filename, Buffer.alloc(64, 1));
+  const originalOpen = fs.open;
+  // Report a smaller size than the file really has, which is what a stat taken
+  // before a concurrent append looks like. Only this file is affected, so the
+  // project marker still reads normally.
+  const mocked = t.mock.method(
+    fs,
+    'open',
+    async (path: Parameters<typeof fs.open>[0], ...rest: unknown[]) => {
+      const handle = await (
+        originalOpen as (
+          ...a: unknown[]
+        ) => Promise<Awaited<ReturnType<typeof fs.open>>>
+      )(path, ...rest);
+      if (String(path) !== filename) return handle;
+      const originalStat = handle.stat.bind(handle);
+      // `stat` is overloaded, so replace it through an unknown-typed view
+      // rather than trying to satisfy every overload in a test double.
+      (handle as unknown as { stat: () => Promise<unknown> }).stat =
+        async () => {
+          const observed = await originalStat();
+          return Object.create(observed, {
+            size: { value: observed.size - 1 },
+          }) as unknown;
+        };
+      return handle;
+    },
+  );
+  syncBuiltinESMExports();
+  t.after(() => {
+    mocked.mock.restore();
+    syncBuiltinESMExports();
+  });
+  await assert.rejects(
+    importArtifactFile(directory, filename),
+    /changed size while it was being read/,
+  );
+  // Nothing was stored from the torn read.
+  assert.deepEqual((await inspectProject(directory)).artifacts, []);
 });
 
 test('import requires initialization and does not implicitly create storage', async (t) => {

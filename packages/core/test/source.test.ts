@@ -150,3 +150,38 @@ test('untrusted references cannot change their identity, artifact, parent, or bo
     ValidationError,
   );
 });
+
+test('resolving a reference never materializes the whole artifact', (t) => {
+  // The performance invariant that motivated Artifact.slice(). Asserting the
+  // returned length would pass even if the implementation copied everything
+  // first, so this locks the mechanism: the resolvers must not call bytes().
+  const artifact = new Artifact(Buffer.from('abcdefghij'));
+  const unit = createSourceUnit(artifact, 2, 8);
+  const span = createSourceSpan(artifact, unit, 3, 6);
+
+  const bytesSpy = t.mock.method(Artifact.prototype, 'bytes');
+  const sliceSpy = t.mock.method(Artifact.prototype, 'slice');
+  t.after(() => {
+    bytesSpy.mock.restore();
+    sliceSpy.mock.restore();
+  });
+
+  // Resolvers return Uint8Array; strict deepEqual distinguishes that from Buffer.
+  assert.deepEqual(
+    resolveSourceUnit(artifact, unit),
+    Uint8Array.from(Buffer.from('cdefgh')),
+  );
+  assert.deepEqual(
+    resolveSourceSpan(artifact, unit, span),
+    Uint8Array.from(Buffer.from('def')),
+  );
+
+  assert.equal(
+    bytesSpy.mock.callCount(),
+    0,
+    'resolvers must not copy the whole artifact',
+  );
+  assert.equal(sliceSpy.mock.callCount(), 2, 'each resolver copies one range');
+  assert.deepEqual(sliceSpy.mock.calls[0]?.arguments, [2, 8]);
+  assert.deepEqual(sliceSpy.mock.calls[1]?.arguments, [3, 6]);
+});

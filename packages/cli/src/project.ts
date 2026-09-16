@@ -5,6 +5,8 @@ import { join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import {
   Artifact,
+  MAX_CONVERSATION_BYTES,
+  hashContent,
   importConversation,
   parseArtifactId,
   ValidationError,
@@ -68,7 +70,11 @@ async function readBounded(path: string, limit: number): Promise<Buffer> {
     if (!stat.isFile() || stat.size > limit) {
       throw new ValidationError(`File must contain at most ${limit} bytes`);
     }
-    const buffer = Buffer.alloc(limit + 1);
+    // Allocate for the size actually observed, plus one byte so that growth
+    // during the read is still detected. Allocating the permitted ceiling here
+    // would cost the maximum on every read regardless of how small the file is.
+    const expected = stat.size;
+    const buffer = Buffer.alloc(expected + 1);
     let length = 0;
     while (length < buffer.length) {
       const { bytesRead } = await handle.read(
@@ -77,12 +83,15 @@ async function readBounded(path: string, limit: number): Promise<Buffer> {
         buffer.length - length,
         null,
       );
-      if (bytesRead === 0) return buffer.subarray(0, length);
+      if (bytesRead === 0) break;
       length += bytesRead;
-      if (length > limit)
-        throw new ValidationError(`File exceeds ${limit} bytes`);
     }
-    throw new ValidationError(`File exceeds ${limit} bytes`);
+    if (length !== expected) {
+      // Concurrent modification. Content addressing cannot describe a file that
+      // changed underneath the read, so refuse rather than hash a torn view.
+      throw new ValidationError('File changed size while it was being read');
+    }
+    return buffer.subarray(0, length);
   } finally {
     await handle.close();
   }
@@ -212,6 +221,17 @@ export async function initializeProject(directory: string) {
     await mkdir(path, { recursive: true, mode: STORE_MODE });
     await assertDirectory(path);
   }
+  // Validate an existing marker before attempting to publish a new one.
+  // Without this, initializing over an incompatible project reports a
+  // byte-count mismatch from the publish path rather than naming the version.
+  try {
+    const existing = await readBounded(project.marker, 4096);
+    if (!existing.equals(PROJECT_FILE)) {
+      throw new ValidationError(describeUnsupportedMarker(existing));
+    }
+  } catch (error) {
+    if (!hasCode(error, 'ENOENT')) throw error;
+  }
   const created = await writeImmutable(
     project.temporary,
     project.marker,
@@ -233,13 +253,16 @@ function artifactPath(artifactsDirectory: string, id: ArtifactId): string {
 export async function importArtifactFile(directory: string, filename: string) {
   const project = await loadProject(directory);
   const bytes = await readBounded(resolve(filename), MAX_ARTIFACT_BYTES);
-  const artifact = new Artifact(bytes);
+  // Hash the bytes already in hand rather than constructing an Artifact, which
+  // would copy once on construction and again on `bytes()`. Import needs the
+  // identity, not an instance.
+  const id = hashContent(bytes);
   const created = await writeImmutable(
     project.temporary,
-    artifactPath(project.artifacts, artifact.id),
-    artifact.bytes(),
+    artifactPath(project.artifacts, id),
+    bytes,
   );
-  return { id: artifact.id, byteLength: artifact.byteLength, created };
+  return { id, byteLength: bytes.byteLength, created };
 }
 
 /**
@@ -312,6 +335,14 @@ function decodeUnit(
 export async function interpretConversation(directory: string, value: unknown) {
   const project = await loadProject(directory);
   const artifact = await readArtifact(project.artifacts, value);
+  // Reject on size before copying the bytes out. The storage ceiling is far
+  // above what this format permits, so an artifact can be stored legitimately
+  // and still be too large for this interpreter.
+  if (artifact.byteLength > MAX_CONVERSATION_BYTES) {
+    throw new ValidationError(
+      `Artifact is ${artifact.byteLength} bytes; this format accepts at most ${MAX_CONVERSATION_BYTES}`,
+    );
+  }
   const conversation: ImportedConversation = importConversation(
     artifact.bytes(),
   );

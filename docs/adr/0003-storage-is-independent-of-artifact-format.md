@@ -71,9 +71,18 @@ real export rather than an imagined one.
 Import no longer reports a message count, since it no longer knows what it stored. Callers that want
 structure call `interpret`.
 
-Reads are still fully buffered, so `MAX_ARTIFACT_BYTES` bounds memory rather than expressing a real
-capability. Exports larger than the ceiling need streaming identity before the limit can rise
-usefully. This is a known limitation, not a design position.
+**A trap for whoever adds import occurrences.** `importArtifactFile` returns `created`, which today
+means "a new content-addressed artifact was written." Once occurrences exist, importing identical
+bytes a second time will create **no new artifact and still create a new import occurrence**. So
+`created: false` must not be read as "nothing happened," and the return shape will need to distinguish
+the two. This follows directly from `same bytes != same import event` above; it is flagged here
+because the current single boolean quietly conflates them.
+
+Reads size their buffer from the file's observed size rather than the permitted ceiling, and refuse a
+file whose size changes mid-read, since content addressing cannot describe a torn view. Reads are
+still fully buffered, so `MAX_ARTIFACT_BYTES` bounds memory rather than expressing a real capability.
+Exports larger than the ceiling need streaming identity before the limit can rise usefully; raising
+the constant alone would not help. This is a known limitation, not a design position.
 
 Containers are permitted by this model but not implemented. An entry extracted from an archive is a
 new artifact derived from the archive artifact, recorded with the extraction method. Decompressed
