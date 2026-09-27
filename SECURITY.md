@@ -53,6 +53,11 @@ treat captured stdout as potentially sensitive. `inspect` verifies identity and
 never emits stored content, though inspecting an occurrence prints its paths and
 root locations.
 
+`status` prints state pages, and `why` prints the **exact evidence bytes** a page
+cites, up to 1 MiB per reference, so treat their output as being as sensitive as
+the material imported. Recording a state reads only artifacts the store already
+holds: a reference never causes a path to be read or acquired.
+
 `experimental claude-code-session` also parses, leniently, as an unstable reader
 of Claude Code local session transcripts. It holds the whole transcript in memory
 and refuses transcripts over 64 MiB. Its output is structure only, never message

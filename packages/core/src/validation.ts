@@ -39,3 +39,40 @@ export function byteRange(
   }
   return { startByte: start, endByte: end };
 }
+
+export function array(value: unknown, label: string): unknown[] {
+  if (!Array.isArray(value)) {
+    throw new ValidationError(`${label} must be an array`);
+  }
+  return value;
+}
+
+export function text(value: unknown, label: string): string {
+  if (typeof value !== 'string' || !value.isWellFormed()) {
+    throw new ValidationError(`${label} must be a well-formed string`);
+  }
+  return value;
+}
+
+export function timestamp(value: unknown, label: string): string {
+  const input = text(value, label);
+  const parsed = new Date(input);
+  if (Number.isNaN(parsed.getTime()) || parsed.toISOString() !== input) {
+    throw new ValidationError(`${label} must be an ISO 8601 UTC timestamp`);
+  }
+  return input;
+}
+
+export function oneOf<T extends string>(
+  value: unknown,
+  allowed: readonly T[],
+  label: string,
+): T {
+  if (
+    typeof value !== 'string' ||
+    !(allowed as readonly string[]).includes(value)
+  ) {
+    throw new ValidationError(`${label} is not a recognized value`);
+  }
+  return value as T;
+}

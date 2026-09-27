@@ -32,6 +32,26 @@ export type {
   SkipReason,
 } from './occurrence.js';
 export {
+  MAX_STATE_PAGE_BYTES,
+  STATE_FORMAT,
+  STATE_VERSION,
+  UNRESOLVED_REASONS,
+  encodeStateRevision,
+  extractLocators,
+  hasValidLines,
+  parseLocator,
+  parseStateId,
+  parseStateRevision,
+  stateIdOf,
+} from './state.js';
+export type {
+  Locator,
+  StateId,
+  StateReference,
+  StateRevision,
+  UnresolvedReason,
+} from './state.js';
+export {
   createSourceUnit,
   createSourceSpan,
   parseSourceUnit,

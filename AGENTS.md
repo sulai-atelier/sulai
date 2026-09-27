@@ -22,15 +22,18 @@ making changes. Apply those rules to code, documentation, issues, and commits.
 - Keep docs, names, comments, and commits concise and suitable for public review.
   Do not put private planning or conversations in the repository. Record accepted
   architectural decisions in ADRs, not unresolved research. Avoid speculative abstractions.
-- Scope this foundation to source artifacts, references, import occurrences, and
-  local import/inspect/interpret. Acquisition reads only the roots a user names:
-  never follow links, and never acquire a path because content refers to it. See
-  [ADR 0005](docs/adr/0005-import-occurrences-record-acquisition-events.md). Project-state reconstruction, semantic extraction,
-  reconciliation, provider adapters, and hosted features need separate designs and
-  requests. Do not silently expand scope.
-- Foundation work is paused at storage format version 3; change it only when a
-  request calls for it. The experimental Claude Code reader stays as it is: do not
-  extend it or build on it without a request.
+- Scope this foundation to source artifacts, references, import occurrences, state
+  revisions, and the local CLI commands. Acquisition reads only the roots a user
+  names: never follow links, and never acquire a path because content refers to
+  it. See [ADR 0005](docs/adr/0005-import-occurrences-record-acquisition-events.md).
+  A state revision records a page and what it cites; it never certifies the page.
+  See [ADR 0007](docs/adr/0007-state-revisions-record-a-view-and-its-evidence.md).
+  Deriving state pages inside Sulai, semantic extraction, reconciliation, provider
+  adapters, and hosted features need separate designs and requests. Do not
+  silently expand scope.
+- Storage is at format version 4; change it only when a request calls for it. The
+  experimental Claude Code reader stays as it is: do not extend it or build on it
+  without a request.
 - Do not add a notion of who decided or who owns an idea. Accepted state and
   explicit acceptance were retired; see
   [ADR 0002](docs/adr/0002-source-meaning-state-separation.md).

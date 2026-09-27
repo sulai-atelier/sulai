@@ -18,11 +18,12 @@ record each acquisition as its own event, including several roots at once. Stora
 accepts exact bytes of any kind; reading them through a format is a separate, named
 operation. The only stable reader is a synthetic conversation format. An
 experimental reader for Claude Code local session transcripts also ships, in its
-own package and behind an `experimental` command (see below). Nothing above source
-preservation is implemented: Sulai does not yet derive project changes or project
-state from what it preserves.
+own package and behind an `experimental` command (see below).
 
-Foundation work is paused at storage format version 3; see [Direction](#direction).
+Above that foundation, Sulai records **state revisions**: a page saying where a
+project stands, with each reference on it resolved to exact preserved bytes or
+marked unresolved. Sulai checks the pointer, never the claim. It does not write the
+page or judge it. Storage is at format version 4.
 
 The APIs and project format are evolving. This is not a production-ready release.
 
@@ -53,10 +54,11 @@ from its observable work, without the user maintaining it and without claiming
 objective truth. It passed both of its stages on that one project. That is one
 project, not evidence that the approach works in general.
 
-The next work is the smallest practical project-state primitive that can reproduce
-that value: show where a project stands, each part traceable to its evidence. Its
-internal representation is still open and will be earned from implementation and
-further use.
+State revisions are the smallest primitive built to reproduce that value:
+`sulai status` shows where a project stands, `sulai why` the exact evidence behind
+one line, and `sulai diff` how the page changed. They have no structured items,
+semantic diff or merge; those wait until use shows a need. See
+[ADR 0007](docs/adr/0007-state-revisions-record-a-view-and-its-evidence.md).
 
 Earlier versions of this README named provider adapters as the next focus. A
 second source remains important, through official provider exports, but it is no
@@ -86,6 +88,16 @@ exact raw records, substitute its ID for `ARTIFACT_ID`:
 
 ```sh
 npm run cli -- interpret .tmp/example ARTIFACT_ID
+```
+
+To record where the project stands, write a page, say `.tmp/STATE.md`, whose lines
+cite evidence as code spans such as `r1#L2`: line 2 of the occurrence's first root.
+Record it against the occurrence the import printed, then read it back:
+
+```sh
+npm run cli -- state record .tmp/example .tmp/STATE.md --from OCCURRENCE_ID
+npm run cli -- status .tmp/example
+npm run cli -- why .tmp/example STATE_ID 1
 ```
 
 **Import preserves; it does not interpret.** Storing exact bytes performs no
@@ -124,9 +136,9 @@ yet.
 [Source identity and storage conventions](docs/source-format.md) describe the
 current format. The [ADRs](docs/adr/) record the decisions to preserve immutable
 raw artifacts, keep storage independent of artifact format, stream preservation,
-and record each acquisition as an occurrence. ADR 0002 separated source, derived
-meaning, and accepted state; its accepted-state layer has since been retired, as
-the ADR records.
+record each acquisition as an occurrence, and record state revisions against it.
+ADR 0002 separated source, derived meaning, and accepted state; its accepted-state
+layer has since been retired, as the ADR records.
 
 ## Contributing
 

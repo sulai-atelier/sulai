@@ -16,12 +16,21 @@ import {
   Artifact,
   MAX_CONVERSATION_BYTES,
   MAX_OCCURRENCE_BYTES,
+  MAX_STATE_PAGE_BYTES,
   encodeOccurrence,
+  encodeStateRevision,
+  extractLocators,
+  hashContent,
+  hasValidLines,
   importConversation,
   occurrenceIdOf,
   parseArtifactId,
   parseOccurrence,
+  parseLocator,
   parseOccurrenceId,
+  parseStateId,
+  parseStateRevision,
+  stateIdOf,
   ValidationError,
 } from '@sulai/core';
 import type {
@@ -33,16 +42,21 @@ import type {
   OccurrenceId,
   OccurrenceSkip,
   SkipReason,
+  StateId,
+  StateReference,
+  StateRevision,
+  UnresolvedReason,
 } from '@sulai/core';
 
 const PROJECT_FORMAT = 'sulai.project';
-const PROJECT_VERSION = 3;
+const PROJECT_VERSION = 4;
 
 /**
  * The project marker describes the Sulai storage format only. It deliberately
  * says nothing about the format of the artifacts inside, because an artifact is
  * exact bytes of any kind. Version 1 embedded `artifactFormat`; version 2 had no
- * occurrence records. Both are refused rather than half-verified.
+ * occurrence records; version 3 had no state revisions. All are refused rather
+ * than half-verified.
  */
 const PROJECT_FILE = Buffer.from(
   JSON.stringify({ format: PROJECT_FORMAT, version: PROJECT_VERSION }) + '\n',
@@ -66,6 +80,7 @@ function paths(directory: string) {
     store,
     artifacts: join(store, 'artifacts'),
     occurrences: join(store, 'occurrences'),
+    states: join(store, 'states'),
     temporary: join(store, 'tmp'),
     marker: join(store, 'project.json'),
   };
@@ -465,6 +480,7 @@ async function loadProject(directory: string) {
   }
   await assertDirectory(project.artifacts);
   await assertDirectory(project.occurrences);
+  await assertDirectory(project.states);
   // `.sulai/tmp` is ephemeral and is recreated on demand, so its absence does
   // not make a project invalid.
   return project;
@@ -487,6 +503,7 @@ export async function initializeProject(directory: string) {
     project.store,
     project.artifacts,
     project.occurrences,
+    project.states,
     project.temporary,
   ]) {
     await mkdir(path, { recursive: true, mode: STORE_MODE });
@@ -977,11 +994,18 @@ export async function inspectProject(directory: string) {
       ? a.id.localeCompare(b.id)
       : a.startedAt.localeCompare(b.startedAt),
   );
+  const states = [];
+  const revisions = await readAllStates(project);
+  for (const [id, revision] of revisions) {
+    await verifyState(project, id, revision, revisions);
+    states.push(summarizeState(id, revision));
+  }
   return {
     format: PROJECT_FORMAT,
     version: PROJECT_VERSION,
     artifacts,
     occurrences,
+    states,
   };
 }
 
@@ -1014,6 +1038,587 @@ export async function inspectOccurrence(directory: string, value: unknown) {
   }
   assertStoredArtifacts(occurrence, stored);
   return { id, ...occurrence };
+}
+
+// ---------------------------------------------------------------------------
+// State revisions (ADR 0007). A revision records a view of the project and
+// exactly what evidence it cited. It certifies none of the view's claims.
+
+/** The most evidence `why` returns for one reference. */
+export const MAX_WHY_BYTES = 1024 * 1024;
+
+function statePath(statesDirectory: string, id: StateId) {
+  return join(statesDirectory, `${id.slice('state:v1:'.length)}.json`);
+}
+
+function storedStateId(filename: string): StateId {
+  if (!/^[a-f0-9]{64}\.json$/.test(filename)) {
+    throw new ValidationError('Unexpected entry in the state store');
+  }
+  return parseStateId(`state:v1:${filename.slice(0, -5)}`);
+}
+
+async function readStoredState(
+  statesDirectory: string,
+  id: StateId,
+): Promise<StateRevision> {
+  const bytes = await readBounded(
+    statePath(statesDirectory, id),
+    MAX_OCCURRENCE_BYTES,
+  );
+  if (stateIdOf(bytes) !== id) {
+    throw new ValidationError('Stored state hash does not match its identity');
+  }
+  return parseStateRevision(bytes);
+}
+
+async function readAllStates(project: ReturnType<typeof paths>) {
+  const revisions = new Map<StateId, StateRevision>();
+  for (const filename of (await readdir(project.states)).sort()) {
+    const id = storedStateId(filename);
+    revisions.set(id, await readStoredState(project.states, id));
+  }
+  return revisions;
+}
+
+function headsOf(revisions: ReadonlyMap<StateId, StateRevision>): StateId[] {
+  const parents = new Set(
+    [...revisions.values()].map((revision) => revision.parent),
+  );
+  return [...revisions.keys()].filter((id) => !parents.has(id)).sort();
+}
+
+/**
+ * Splits a page into lines: a line ends at LF, a CR just before that LF is part
+ * of the terminator, and a trailing LF does not start a new line.
+ */
+function pageLines(page: string): string[] {
+  if (page === '') return [];
+  const lines = page.split('\n').map((line) => line.replace(/\r$/, ''));
+  if (page.endsWith('\n')) lines.pop();
+  return lines;
+}
+
+interface LineTable {
+  readonly id: ArtifactId;
+  readonly lines: number;
+  readonly starts: ReadonlyMap<number, number>;
+  readonly ends: ReadonlyMap<number, number>;
+}
+
+/**
+ * One streaming pass over a stored artifact: its identity, its number of lines,
+ * and where the requested lines start and where their content ends, excluding
+ * the terminator. Memory is bounded by the chunk size.
+ */
+async function scanLines(
+  path: string,
+  wanted: ReadonlySet<number>,
+): Promise<LineTable> {
+  const handle = await openRegularFile(path);
+  try {
+    const expected = (await handle.stat()).size;
+    const hash = createHash('sha256');
+    const starts = new Map<number, number>();
+    const ends = new Map<number, number>();
+    let line = 1;
+    let lineStart = 0;
+    let offset = 0;
+    let previous = -1;
+    if (wanted.has(1)) starts.set(1, 0);
+    for await (const chunk of readChunks(handle, expected)) {
+      hash.update(chunk);
+      for (let index = 0; index < chunk.length; index += 1) {
+        const byte = chunk[index] as number;
+        const at = offset + index;
+        if (byte === 0x0a) {
+          if (wanted.has(line)) {
+            ends.set(line, at > lineStart && previous === 0x0d ? at - 1 : at);
+          }
+          line += 1;
+          lineStart = at + 1;
+          if (wanted.has(line)) starts.set(line, lineStart);
+        }
+        previous = byte;
+      }
+      offset += chunk.length;
+    }
+    assertUnchangedSize(offset, expected);
+    let lines = line - 1;
+    if (lineStart < offset) {
+      // A last line without a terminator. A lone CR at the end is content.
+      if (wanted.has(line)) ends.set(line, offset);
+      lines = line;
+    }
+    return {
+      id: parseArtifactId(`sha256:${hash.digest('hex')}`),
+      lines,
+      starts,
+      ends,
+    };
+  } finally {
+    await handle.close();
+  }
+}
+
+/** Reads one byte range with bounded memory, validating it as UTF-8. */
+async function readRange(
+  path: string,
+  start: number,
+  end: number,
+  limit: number,
+): Promise<{ text: string; valid: boolean; truncated: boolean }> {
+  const handle = await openRegularFile(path);
+  try {
+    const decoder = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
+    const buffer = Buffer.alloc(
+      Math.min(STREAM_CHUNK_BYTES, Math.max(end - start, 1)),
+    );
+    let position = start;
+    let kept = '';
+    let keptBytes = 0;
+    try {
+      while (position < end) {
+        const { bytesRead } = await handle.read(
+          buffer,
+          0,
+          Math.min(buffer.length, end - position),
+          position,
+        );
+        if (bytesRead === 0) break;
+        const chunk = buffer.subarray(0, bytesRead);
+        const decoded = decoder.decode(chunk, { stream: true });
+        if (keptBytes < limit) {
+          kept += decoded;
+          keptBytes += bytesRead;
+        }
+        position += bytesRead;
+      }
+      kept += decoder.decode();
+    } catch {
+      return { text: '', valid: false, truncated: false };
+    }
+    const truncated = end - start > limit;
+    if (truncated) {
+      // Cut back to a character boundary so no character is split.
+      const bytes = Buffer.from(kept, 'utf8');
+      let cut = limit;
+      while (cut > 0 && ((bytes[cut] as number) & 0xc0) === 0x80) cut -= 1;
+      kept = bytes.subarray(0, cut).toString('utf8');
+    }
+    return { text: kept, valid: true, truncated };
+  } finally {
+    await handle.close();
+  }
+}
+
+/**
+ * Resolves each locator against one occurrence, never against anything else.
+ * A locator that cannot be resolved stays unresolved with its reason; nothing
+ * is retargeted.
+ */
+async function resolveReferences(
+  project: ReturnType<typeof paths>,
+  occurrence: Occurrence,
+  locators: readonly string[],
+): Promise<StateReference[]> {
+  const results = new Map<string, StateReference>();
+  const pending = new Map<
+    ArtifactId,
+    { locator: string; startLine: number; endLine: number }[]
+  >();
+  const rootById = new Map(occurrence.roots.map((root) => [root.id, root]));
+  for (const locator of locators) {
+    const parsed = parseLocator(locator);
+    if (parsed === null) continue;
+    const unresolved = (reason: UnresolvedReason) =>
+      results.set(locator, { locator, status: 'unresolved', reason });
+    if (!hasValidLines(parsed)) {
+      unresolved('invalid-lines');
+      continue;
+    }
+    const root = rootById.get(parsed.root);
+    if (root === undefined) {
+      unresolved('unknown-root');
+      continue;
+    }
+    if ((root.kind === 'file') !== (parsed.path === '')) {
+      unresolved('path-not-in-occurrence');
+      continue;
+    }
+    const entry = occurrence.entries.find(
+      (item) => item.root === root.id && item.path === parsed.path,
+    );
+    if (entry === undefined) {
+      const notCaptured =
+        occurrence.skipped.some(
+          (item) => item.root === root.id && item.path === parsed.path,
+        ) ||
+        occurrence.excluded.some(
+          (item) =>
+            item.root === root.id &&
+            (parsed.path === item.path ||
+              parsed.path.startsWith(`${item.path}/`)),
+        );
+      unresolved(notCaptured ? 'not-captured' : 'path-not-in-occurrence');
+      continue;
+    }
+    const list = pending.get(entry.artifact) ?? [];
+    list.push({
+      locator,
+      startLine: parsed.startLine,
+      endLine: parsed.endLine,
+    });
+    pending.set(entry.artifact, list);
+  }
+  for (const [artifact, wanted] of pending) {
+    const path = artifactPath(project.artifacts, artifact);
+    const table = await scanLines(
+      path,
+      new Set(wanted.flatMap((item) => [item.startLine, item.endLine])),
+    );
+    if (table.id !== artifact) {
+      throw new ValidationError(
+        'Stored artifact hash does not match its identity',
+      );
+    }
+    for (const item of wanted) {
+      if (item.endLine > table.lines) {
+        results.set(item.locator, {
+          locator: item.locator,
+          status: 'unresolved',
+          reason: 'line-out-of-range',
+        });
+        continue;
+      }
+      const startByte = table.starts.get(item.startLine) as number;
+      const endByte = table.ends.get(item.endLine) as number;
+      const { valid } = await readRange(path, startByte, endByte, 0);
+      results.set(
+        item.locator,
+        valid
+          ? {
+              locator: item.locator,
+              status: 'resolved',
+              artifact,
+              startByte,
+              endByte,
+            }
+          : {
+              locator: item.locator,
+              status: 'unresolved',
+              reason: 'not-utf8-text',
+            },
+      );
+    }
+  }
+  return locators
+    .filter((locator) => results.has(locator))
+    .map((locator) => results.get(locator) as StateReference);
+}
+
+function countReferences(revision: StateRevision) {
+  const unresolved = revision.references.filter(
+    (reference) => reference.status === 'unresolved',
+  );
+  return {
+    total: revision.references.length,
+    resolved: revision.references.length - unresolved.length,
+    unresolved: unresolved.map((reference) => ({
+      locator: reference.locator,
+      reason: reference.status === 'unresolved' ? reference.reason : undefined,
+    })),
+  };
+}
+
+function summarizeState(id: StateId, revision: StateRevision) {
+  const counts = countReferences(revision);
+  return {
+    id,
+    parent: revision.parent,
+    createdAt: revision.createdAt,
+    occurrence: revision.occurrence,
+    references: { total: counts.total, resolved: counts.resolved },
+  };
+}
+
+async function readPage(project: ReturnType<typeof paths>, page: ArtifactId) {
+  const artifact = await readStoredArtifact(
+    project.root,
+    page,
+    MAX_STATE_PAGE_BYTES,
+  );
+  return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(
+    artifact.bytes(),
+  );
+}
+
+/**
+ * Proves a revision end to end: its page and occurrence verify, its parent is
+ * stored, the page cites exactly the recorded locators in order, and resolving
+ * them again against that occurrence gives exactly the recorded references,
+ * artifact and byte range included.
+ */
+async function verifyState(
+  project: ReturnType<typeof paths>,
+  id: StateId,
+  revision: StateRevision,
+  revisions: ReadonlyMap<StateId, StateRevision>,
+): Promise<void> {
+  if (revision.parent !== null && !revisions.has(revision.parent)) {
+    throw new ValidationError(`State ${id} names a parent that is not stored`);
+  }
+  const page = await readPage(project, revision.page);
+  const occurrence = await readStoredOccurrence(
+    project.occurrences,
+    revision.occurrence,
+  );
+  const locators = extractLocators(page);
+  const recorded = revision.references.map((reference) => reference.locator);
+  if (JSON.stringify(locators) !== JSON.stringify(recorded)) {
+    throw new ValidationError(
+      `State ${id} does not record exactly what its page cites`,
+    );
+  }
+  const again = await resolveReferences(project, occurrence, locators);
+  if (JSON.stringify(again) !== JSON.stringify(revision.references)) {
+    throw new ValidationError(
+      `State ${id} records references its occurrence does not support`,
+    );
+  }
+}
+
+/**
+ * Records a state page as a new revision. The page is published first and the
+ * revision last, so a revision never names bytes the store does not hold. With
+ * no parent given, the one head is the parent; with several heads it refuses
+ * and names them rather than choosing.
+ */
+export async function recordState(
+  directory: string,
+  pageFile: string,
+  from: unknown,
+  parent?: unknown,
+) {
+  const project = await loadProject(directory);
+  const occurrenceId = parseOccurrenceId(from);
+  const occurrence = await readStoredOccurrence(
+    project.occurrences,
+    occurrenceId,
+  );
+  const bytes = await readBounded(resolve(pageFile), MAX_STATE_PAGE_BYTES);
+  let page: string;
+  try {
+    page = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(
+      bytes,
+    );
+  } catch {
+    throw new ValidationError('A state page must be UTF-8 text');
+  }
+  const revisions = await readAllStates(project);
+  let parentId: StateId | null;
+  if (parent !== undefined) {
+    parentId = parseStateId(parent);
+    if (!revisions.has(parentId)) {
+      throw new ValidationError('The named parent state is not stored');
+    }
+  } else {
+    const heads = headsOf(revisions);
+    if (heads.length > 1) {
+      throw new ValidationError(
+        `There are ${heads.length} heads; name the parent with --parent: ${heads.join(', ')}`,
+      );
+    }
+    parentId = heads[0] ?? null;
+  }
+  const references = await resolveReferences(
+    project,
+    occurrence,
+    extractLocators(page),
+  );
+  const pageId = hashContent(bytes);
+  await writeImmutable(
+    project.temporary,
+    artifactPath(project.artifacts, pageId),
+    bytes,
+  );
+  const {
+    id,
+    bytes: record,
+    revision,
+  } = encodeStateRevision({
+    format: 'sulai.state',
+    version: 1,
+    parent: parentId,
+    createdAt: new Date().toISOString(),
+    page: pageId,
+    occurrence: occurrenceId,
+    references,
+  });
+  await writeImmutable(
+    project.temporary,
+    statePath(project.states, id),
+    record,
+  );
+  return {
+    ...summarizeState(id, revision),
+    references: countReferences(revision),
+  };
+}
+
+/**
+ * Where the project currently appears to stand: every head, meaning every
+ * revision with no children, with its page and the resolution recorded when it
+ * was made. Several heads are all reported; none is named the winner. The
+ * cited evidence is not re-read here; `inspect` does that.
+ */
+export async function projectStatus(directory: string) {
+  const project = await loadProject(directory);
+  const revisions = await readAllStates(project);
+  const heads = [];
+  for (const id of headsOf(revisions)) {
+    const revision = revisions.get(id) as StateRevision;
+    heads.push({
+      ...summarizeState(id, revision),
+      references: countReferences(revision),
+      page: await readPage(project, revision.page),
+    });
+  }
+  return { heads };
+}
+
+/**
+ * One line of a revision's page and the exact evidence each of its references
+ * points to. A line is only a line in this revision, not a semantic item. Each
+ * cited artifact is verified by streaming before its range is read, and the
+ * range is read with bounded memory.
+ */
+export async function explainLine(
+  directory: string,
+  state: unknown,
+  lineNumber: unknown,
+) {
+  const project = await loadProject(directory);
+  const id = parseStateId(state);
+  const revision = await readStoredState(project.states, id);
+  const lines = pageLines(await readPage(project, revision.page));
+  const line = Number(lineNumber);
+  if (!Number.isSafeInteger(line) || line < 1 || line > lines.length) {
+    throw new ValidationError(`The page has ${lines.length} lines`);
+  }
+  const text = lines[line - 1] as string;
+  const occurrence = await readStoredOccurrence(
+    project.occurrences,
+    revision.occurrence,
+  );
+  const references = [];
+  for (const locator of extractLocators(text)) {
+    const reference = revision.references.find(
+      (item) => item.locator === locator,
+    );
+    if (reference === undefined) {
+      throw new ValidationError(`State ${id} did not record ${locator}`);
+    }
+    const parsed = parseLocator(locator);
+    const root = occurrence.roots.find((item) => item.id === parsed?.root);
+    const where = {
+      root: parsed?.root,
+      locator: root?.locator,
+      path: parsed?.path,
+    };
+    if (reference.status === 'unresolved') {
+      references.push({ ...reference, where });
+      continue;
+    }
+    await verifyStoredArtifact(project.artifacts, reference.artifact);
+    const evidence = await readRange(
+      artifactPath(project.artifacts, reference.artifact),
+      reference.startByte,
+      reference.endByte,
+      MAX_WHY_BYTES,
+    );
+    references.push({
+      ...reference,
+      where,
+      evidence: evidence.text,
+      truncated: evidence.truncated,
+    });
+  }
+  return { state: id, line, text, references };
+}
+
+/**
+ * The lines removed from and added to one revision's page to give another's,
+ * in order. A plain line diff: no meaning is inferred from it.
+ */
+export async function diffStates(
+  directory: string,
+  from: unknown,
+  to: unknown,
+) {
+  const project = await loadProject(directory);
+  const a = parseStateId(from);
+  const b = parseStateId(to);
+  const before = pageLines(
+    await readPage(project, (await readStoredState(project.states, a)).page),
+  );
+  const after = pageLines(
+    await readPage(project, (await readStoredState(project.states, b)).page),
+  );
+  if (before.length * after.length > 25_000_000) {
+    throw new ValidationError('These pages are too long to diff');
+  }
+  const table = Array.from(
+    { length: before.length + 1 },
+    () => new Uint32Array(after.length + 1),
+  );
+  for (let i = before.length - 1; i >= 0; i -= 1) {
+    for (let j = after.length - 1; j >= 0; j -= 1) {
+      (table[i] as Uint32Array)[j] =
+        before[i] === after[j]
+          ? ((table[i + 1] as Uint32Array)[j + 1] as number) + 1
+          : Math.max(
+              (table[i + 1] as Uint32Array)[j] as number,
+              (table[i] as Uint32Array)[j + 1] as number,
+            );
+    }
+  }
+  const changes: { op: '-' | '+'; line: string }[] = [];
+  let i = 0;
+  let j = 0;
+  while (i < before.length && j < after.length) {
+    if (before[i] === after[j]) {
+      i += 1;
+      j += 1;
+    } else if (
+      ((table[i + 1] as Uint32Array)[j] as number) >=
+      ((table[i] as Uint32Array)[j + 1] as number)
+    ) {
+      changes.push({ op: '-', line: before[i] as string });
+      i += 1;
+    } else {
+      changes.push({ op: '+', line: after[j] as string });
+      j += 1;
+    }
+  }
+  while (i < before.length)
+    changes.push({ op: '-', line: before[i++] as string });
+  while (j < after.length)
+    changes.push({ op: '+', line: after[j++] as string });
+  return { from: a, to: b, changes };
+}
+
+/** One revision in full, after proving it end to end. */
+export async function inspectState(directory: string, value: unknown) {
+  const project = await loadProject(directory);
+  const id = parseStateId(value);
+  const revisions = await readAllStates(project);
+  const revision = revisions.get(id);
+  if (revision === undefined) {
+    throw new ValidationError('No such state revision is stored');
+  }
+  await verifyState(project, id, revision, revisions);
+  return { id, ...revision };
 }
 
 function decodeUnit(

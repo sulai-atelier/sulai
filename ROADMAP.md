@@ -14,13 +14,13 @@ interpretation is a separate command that today understands only a synthetic
 conversation format. Each import records an occurrence: which inputs were attempted,
 which exact bytes each became, and what could not be captured and why. One
 occurrence can hold several roots. An experimental, unstable reader reports the
-structure of Claude Code local session transcripts. It is a reference foundation,
-not yet a project-state system.
+structure of Claude Code local session transcripts.
 
-Foundation work is paused at storage format version 3. Further changes to it wait
-for a need that the project-state work shows.
+State revisions sit on top: a page saying where a project stands, each reference
+on it resolved to exact preserved bytes or marked unresolved, with `status`,
+`why` and `diff` to read them. Storage is at format version 4.
 
-## Next: the smallest practical status primitive
+## Now: the smallest practical status primitive
 
 A pilot on Sulai's own development, with its evaluation fixed in advance, asked
 whether Sulai can keep a small, useful picture of where a project stands, rebuilt
@@ -31,10 +31,10 @@ hand-kept one missed. As a handoff for one real task it did at least as well, wi
 less unnecessary change. That is one project and one task, not evidence that the
 approach works in general.
 
-The next work is the smallest practical project-state primitive that can reproduce
-that value: show where a project stands, each part traceable to its evidence. Its
-internal representation is still open and will be earned from implementation and
-further use.
+State revisions are the smallest primitive built to reproduce that value. Sulai
+does not write the page or judge it; it records the page and exactly what the page
+cites. Structured items, semantic diff and merge are left out until use shows a
+need. See [ADR 0007](docs/adr/0007-state-revisions-record-a-view-and-its-evidence.md).
 
 The pilot did not classify who said or decided something. Speaker and authorship
 are not the axis that determines project state.

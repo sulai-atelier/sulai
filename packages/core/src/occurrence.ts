@@ -1,7 +1,14 @@
 import { createHash } from 'node:crypto';
 import { parseArtifactId } from './artifact.js';
 import type { ArtifactId } from './artifact.js';
-import { record, ValidationError } from './validation.js';
+import {
+  array,
+  oneOf,
+  record,
+  text,
+  timestamp,
+  ValidationError,
+} from './validation.js';
 
 /**
  * An import occurrence is an immutable record of one acquisition event: which
@@ -83,43 +90,6 @@ export interface Occurrence {
   readonly entries: readonly OccurrenceEntry[];
   readonly skipped: readonly OccurrenceSkip[];
   readonly excluded: readonly OccurrenceExclusion[];
-}
-
-function array(value: unknown, label: string): unknown[] {
-  if (!Array.isArray(value)) {
-    throw new ValidationError(`${label} must be an array`);
-  }
-  return value;
-}
-
-function text(value: unknown, label: string): string {
-  if (typeof value !== 'string' || !value.isWellFormed()) {
-    throw new ValidationError(`${label} must be a well-formed string`);
-  }
-  return value;
-}
-
-function timestamp(value: unknown, label: string): string {
-  const input = text(value, label);
-  const parsed = new Date(input);
-  if (Number.isNaN(parsed.getTime()) || parsed.toISOString() !== input) {
-    throw new ValidationError(`${label} must be an ISO 8601 UTC timestamp`);
-  }
-  return input;
-}
-
-function oneOf<T extends string>(
-  value: unknown,
-  allowed: readonly T[],
-  label: string,
-): T {
-  if (
-    typeof value !== 'string' ||
-    !(allowed as readonly string[]).includes(value)
-  ) {
-    throw new ValidationError(`${label} is not a recognized value`);
-  }
-  return value as T;
 }
 
 function isAbsoluteFor(platform: string, locator: string): boolean {

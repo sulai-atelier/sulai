@@ -98,6 +98,8 @@ publication: publication does not validate at all.
       <64-character-sha256-digest>.raw
     occurrences/
       <64-character-sha256-digest>.json
+    states/
+      <64-character-sha256-digest>.json
     tmp/
 ```
 
@@ -105,17 +107,18 @@ publication: publication does not validate at all.
 format marker written and validated by the CLI, not user-editable configuration:
 
 ```text
-{"format":"sulai.project","version":3}
+{"format":"sulai.project","version":4}
 ```
 
 The marker describes the **storage** format and deliberately says nothing about
 the format of the artifacts inside, because an artifact is exact bytes of any
-kind. Version 1 embedded `artifactFormat`; version 2 had no occurrence records.
-Both are refused with a specific message before anything in the project is
-touched, and this pre-alpha does not migrate them. The marker's version is not a
-project state version. No project state is recorded by this CLI. See
-[ADR 0003](adr/0003-storage-is-independent-of-artifact-format.md) and
-[ADR 0005](adr/0005-import-occurrences-record-acquisition-events.md).
+kind. Version 1 embedded `artifactFormat`; version 2 had no occurrence records;
+version 3 had no state revisions. All three are refused with a specific message
+before anything in the project is touched, and this pre-alpha does not migrate
+them. The marker's version is not a state revision. See
+[ADR 0003](adr/0003-storage-is-independent-of-artifact-format.md),
+[ADR 0005](adr/0005-import-occurrences-record-acquisition-events.md) and
+[ADR 0007](adr/0007-state-revisions-record-a-view-and-its-evidence.md).
 
 `.sulai/tmp` is ephemeral. It is recreated on demand, so its absence does not
 make a project invalid. Storage directories are created with mode `0700`, which
@@ -146,7 +149,7 @@ import also records one occurrence, described below.
 `inspect` verifies that every stored artifact still hashes to the name it is
 stored under, without parsing any artifact. It then verifies every occurrence the
 same way, parses it strictly, and checks that every artifact it names is stored at
-the size it records.
+the size it records. Last it verifies every state revision, as described below.
 
 `interpret` reads one artifact through one specific format. It may fail on bytes
 that were stored successfully, and that failure leaves the artifact untouched.
@@ -266,3 +269,75 @@ The CLI prints `occurrenceId`, `status`, `roots`, `entryCount`, `newArtifacts`,
 its root. A partial acquisition exits with
 status 3 and still prints its record. `sulai inspect <project> <occurrence-id>`
 prints the full record after verifying it and every artifact it names.
+
+## State revisions
+
+A state revision records one view of where a project stands, as a page, plus
+exactly what evidence the page cites. It does not certify the page. Each citation
+is either resolved to exact preserved bytes or recorded as unresolved with a
+reason. See [ADR 0007](adr/0007-state-revisions-record-a-view-and-its-evidence.md).
+
+The **page** is UTF-8 text of at most 1 MiB, stored as an ordinary artifact. A
+**reference** is an inline code span whose whole content matches
+`rN/<path>#L<a>` or `rN/<path>#L<a>-L<b>`, or `rN#L<a>` and `rN#L<a>-L<b>`
+for a file root. `rN` is a root ID of the revision's occurrence and `<path>` is
+that occurrence's relative path. Lines are 1-based and inclusive. Every other code
+span is not a reference. A page's references are its distinct locators in the
+order they first appear.
+
+**Line rules.** A line ends at LF, and a CR immediately before the LF belongs to
+the terminator. The last line may have no LF, and a trailing LF does not start a
+new line. A range runs from the first byte of line `a` to the end of line `b`'s
+content, excluding its terminator, and must be valid UTF-8. An empty line gives an
+empty range.
+
+The record is one line of compact JSON followed by one LF, with the fields in this
+order and no others:
+
+| Field        | Meaning                                                         |
+| ------------ | --------------------------------------------------------------- |
+| `format`     | `"sulai.state"`                                                 |
+| `version`    | `1`                                                             |
+| `parent`     | a state ID, or `null` for a first revision                      |
+| `createdAt`  | `YYYY-MM-DDTHH:MM:SS.sssZ`, the recording machine's clock       |
+| `page`       | the page's `ArtifactId`                                         |
+| `occurrence` | the `OccurrenceId` every reference is resolved against          |
+| `references` | in page order; each `{locator, status, ...}` as described below |
+
+A resolved reference is `{locator, status: "resolved", artifact, startByte,
+endByte}`, with a half-open byte range into that artifact. An unresolved one is
+`{locator, status: "unresolved", reason}`, and is never retargeted:
+
+| Reason                   | Meaning                                                                                |
+| ------------------------ | -------------------------------------------------------------------------------------- |
+| `unknown-root`           | the occurrence has no such root                                                        |
+| `path-not-in-occurrence` | no input at that path, or a path given for a file root or omitted for a directory root |
+| `not-captured`           | the input was skipped, or lies inside an excluded directory                            |
+| `invalid-lines`          | line 0, or a range that ends before it starts                                          |
+| `line-out-of-range`      | the file has fewer lines                                                               |
+| `not-utf8-text`          | the range is not valid UTF-8                                                           |
+
+A record is accepted only if it is byte-for-byte this canonical encoding. Its
+identity is `state:v1:` followed by the SHA-256 of those bytes, and it is stored as
+`states/<digest>.json`.
+
+**Recording.** `sulai state record <project> <page> --from <occurrence-id>
+[--parent <state-id>]` resolves each reference once, streaming each cited artifact
+once. The parent is the one given; otherwise the only head, a revision no other
+revision names as its parent; otherwise none. With several heads and no parent
+given, recording refuses and lists them. Time never chooses. The page artifact is
+published first and the revision last, by the never-replace hard-link protocol, so
+a failure leaves at most an unreferenced page artifact.
+
+**Reading.** `sulai status <project>` prints every head with its page and the
+reference counts recorded in it, and hashes nothing. `sulai why <project>
+<state-id> <line>` returns, for each reference on that line of the page, its
+resolution and, when resolved, the exact bytes. It first verifies the cited
+artifact's hash by streaming, then reads only the range, at most 1 MiB of it per
+reference, marking a cut-off as `truncated`. `sulai diff <project> <a> <b>`
+lists the page lines removed and added, in order.
+
+**Verification.** `inspect` checks that each revision hashes to its name and is
+canonical, that its parent is stored, that its page and occurrence verify, that its
+references are exactly the page's references, and that resolving them again against
+the occurrence gives exactly the recorded ranges and reasons.
