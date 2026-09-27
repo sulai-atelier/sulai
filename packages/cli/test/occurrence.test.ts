@@ -475,12 +475,6 @@ test(
       'closed/inner.txt': 'inner',
       'open.txt': 'open',
     });
-    await chmod(join(root, 'locked.txt'), 0o000);
-    await chmod(join(root, 'closed'), 0o000);
-    t.after(async () => {
-      await chmod(join(root, 'closed'), 0o700);
-      await chmod(join(root, 'locked.txt'), 0o600);
-    });
     const fifo = spawnSync('mkfifo', [join(root, 'pipe')]);
     const expected = [
       { path: 'closed', reason: 'unreadable' },
@@ -489,7 +483,18 @@ test(
         ? [{ path: 'pipe', reason: 'not-regular-file' }]
         : []),
     ];
-    const result = await importPath(directory, root);
+    await chmod(join(root, 'locked.txt'), 0o000);
+    await chmod(join(root, 'closed'), 0o000);
+    // Restored here, before the test returns, because the temporary directory
+    // is removed by a hook registered earlier, and a recursive removal cannot
+    // list a directory that is still mode 000.
+    let result;
+    try {
+      result = await importPath(directory, root);
+    } finally {
+      await chmod(join(root, 'closed'), 0o700);
+      await chmod(join(root, 'locked.txt'), 0o600);
+    }
     assert.deepEqual(result.skipped, expected);
     assert.equal(result.entryCount, 1);
   },
