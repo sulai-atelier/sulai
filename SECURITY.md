@@ -28,16 +28,29 @@ is available disk space. Storing material is not an assertion that it is
 meaningful or safe. Raw content is never executed, and no stored bytes are parsed
 unless a command explicitly interprets them.
 
-A file that changes size while it is being read is refused. That detects growth
-and truncation only; an in-place overwrite at the same length is not detected, so
-do not import a file another process is still writing. Stored content integrity
+**Acquisition reads only the path you name.** Importing a directory walks it
+recursively, but never follows symbolic links or junctions and never reads content
+looking for references. A file mentioned by the material you import is not
+acquired unless it lies under the path you named, so importing a session that once
+read a credential file does not copy that file. Links, unreadable and special files
+are recorded as skipped, with a reason, and are not captured.
+
+**Occurrence records contain the absolute path of each acquisition root,** which
+can reveal user and directory names. Treat a `.sulai` directory as being as private
+as the material in it.
+
+A file that changes size while it is being read is not captured: it is recorded as
+skipped (`changed-during-read`) and the import reports a partial acquisition. That
+detects growth and truncation only; an in-place overwrite at the same length is not
+detected, so do not rely on capturing a file another process is still writing. Stored content integrity
 does not depend on that check, because it is verified by SHA-256.
 
 `interpret` is the only command that parses, and only through the versioned
 synthetic conversation format, which limits input to 1 MiB and 10,000 messages and
 rejects malformed references. Its output is JSON **including source content**, so
 treat captured stdout as potentially sensitive. `inspect` verifies identity and
-never emits stored content.
+never emits stored content, though inspecting an occurrence prints its paths and
+root locations.
 
 Stored bytes are hashed on inspection. Imports never overwrite existing artifact
 paths. Hashes establish byte identity and detect a mismatch; they do not establish

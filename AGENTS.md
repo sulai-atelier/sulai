@@ -15,14 +15,17 @@ making changes. Apply those rules to code, documentation, issues, and commits.
 - Treat files and deserialized values as untrusted. Validate before persisting or
   resolving references. Never normalize stored raw bytes.
 - Use strict TypeScript, explicit byte coordinate conventions, and deterministic
-  identities. Do not use timestamps or randomness in content identity.
+  identities. Do not use timestamps or randomness in content identity; an
+  import occurrence is an event, and its nonce and times are event data only.
 - Test observable invariants, including malformed input and exact byte round trips.
   Use synthetic fixtures only; never commit real conversation exports or secrets.
 - Keep docs, names, comments, and commits concise and suitable for public review.
   Do not put private planning or conversations in the repository. Record accepted
   architectural decisions in ADRs, not unresolved research. Avoid speculative abstractions.
-- Scope this foundation to source artifacts, references, and local
-  import/inspect/interpret. Semantic extraction, reconciliation, accepted state,
+- Scope this foundation to source artifacts, references, import occurrences, and
+  local import/inspect/interpret. Acquisition reads only the roots a user names:
+  never follow links, and never acquire a path because content refers to it. See
+  [ADR 0005](docs/adr/0005-import-occurrences-record-acquisition-events.md). Semantic extraction, reconciliation, accepted state,
   and hosted features need separate designs and requests. Do not silently expand
   scope.
 - Storage never depends on an artifact format. Import preserves exact bytes and

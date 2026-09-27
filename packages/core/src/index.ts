@@ -11,6 +11,27 @@ export type {
   ImportedConversation,
 } from './conversation.js';
 export {
+  EXCLUSION_REASONS,
+  MAX_OCCURRENCE_BYTES,
+  OCCURRENCE_FORMAT,
+  OCCURRENCE_VERSION,
+  SKIP_REASONS,
+  encodeOccurrence,
+  occurrenceIdOf,
+  parseOccurrence,
+  parseOccurrenceId,
+} from './occurrence.js';
+export type {
+  ExclusionReason,
+  Occurrence,
+  OccurrenceEntry,
+  OccurrenceExclusion,
+  OccurrenceId,
+  OccurrenceRoot,
+  OccurrenceSkip,
+  SkipReason,
+} from './occurrence.js';
+export {
   createSourceUnit,
   createSourceSpan,
   parseSourceUnit,

@@ -69,7 +69,7 @@ test('the project marker is an exact, independently specified byte sequence', as
   // carries no artifact format.
   assert.equal(
     marker.toString('utf8'),
-    '{"format":"sulai.project","version":2}\n',
+    '{"format":"sulai.project","version":3}\n',
   );
   assert.equal(marker.byteLength, 39);
 });
@@ -111,7 +111,7 @@ test('storage accepts arbitrary bytes and never interprets them', async (t) => {
   assert.deepEqual(inspection.artifacts, [
     { id: imported.id, byteLength: raw.byteLength },
   ]);
-  assert.equal(inspection.version, 2);
+  assert.equal(inspection.version, 3);
 });
 
 test('preserve first, interpret second: unreadable material is stored and survives a failed interpretation', async (t) => {
@@ -505,7 +505,7 @@ test('a version 1 project is refused with a specific, actionable message', async
     '{"format":"sulai.project","version":1,"artifactFormat":"sulai.conversation.v1"}\n',
   );
   const specific =
-    /storage format version 1.*requires version 2.*does not migrate/s;
+    /storage format version 1.*requires version 3.*does not migrate/s;
   await assert.rejects(inspectProject(directory), specific);
   // Every entry point must name the version. `init` previously reached the
   // publish path first and reported a byte-count mismatch, which tells the user
@@ -526,6 +526,24 @@ test('a version 1 project is refused with a specific, actionable message', async
     await readFile(marker, 'utf8'),
     '{"format":"sulai.project","version":1,"artifactFormat":"sulai.conversation.v1"}\n',
   );
+});
+
+test('a version 2 project, which had no occurrence records, is refused by version', async (t) => {
+  const directory = await temporary(t);
+  // Exactly the layout version 2 wrote: no occurrences directory.
+  await fs.mkdir(join(directory, '.sulai', 'artifacts'), { recursive: true });
+  const marker = join(directory, '.sulai', 'project.json');
+  await writeFile(marker, '{"format":"sulai.project","version":2}\n');
+  const specific =
+    /storage format version 2.*requires version 3.*does not migrate/s;
+  await assert.rejects(inspectProject(directory), specific);
+  await assert.rejects(initializeProject(directory), specific);
+  await assert.rejects(importArtifactFile(directory, fixture), specific);
+  // Refused before anything is created inside it.
+  assert.deepEqual((await readdir(join(directory, '.sulai'))).sort(), [
+    'artifacts',
+    'project.json',
+  ]);
 });
 
 test('a file that changes size while being read is refused rather than hashed', async (t) => {
@@ -617,16 +635,46 @@ test('CLI initializes, imports, inspects, and interprets in separate processes',
   assert.deepEqual(run(['init', directory]), { directory, created: true });
   const artifact = importConversation(await readFile(fixture)).artifact;
   const summary = { id: artifact.id, byteLength: artifact.byteLength };
-  assert.deepEqual(run(['import', directory, fixture]), {
-    ...summary,
-    created: true,
+  const imported = run(['import', directory, fixture]) as {
+    occurrenceId: string;
+  };
+  assert.match(imported.occurrenceId, /^occurrence:v1:[a-f0-9]{64}$/);
+  assert.deepEqual(imported, {
+    occurrenceId: imported.occurrenceId,
+    status: 'complete',
+    root: { kind: 'file', locator: fixture },
+    entryCount: 1,
+    newArtifacts: 1,
+    existingArtifacts: 0,
+    skipped: [],
+    excluded: [],
   });
-  assert.deepEqual(run(['inspect', directory]), {
+  const inspection = run(['inspect', directory]) as {
+    occurrences: { startedAt: string }[];
+  };
+  assert.deepEqual(inspection, {
     format: 'sulai.project',
-    version: 2,
+    version: 3,
     artifacts: [summary],
+    occurrences: [
+      {
+        id: imported.occurrenceId,
+        status: 'complete',
+        startedAt: inspection.occurrences[0]?.startedAt,
+        entries: 1,
+        skipped: 0,
+        excluded: 0,
+      },
+    ],
   });
   assert.deepEqual(run(['inspect', directory, artifact.id]), summary);
+  const record = run(['inspect', directory, imported.occurrenceId]) as {
+    entries: { path: string; artifact: string }[];
+  };
+  assert.deepEqual(
+    record.entries.map(({ path, artifact }) => ({ path, artifact })),
+    [{ path: '', artifact: artifact.id }],
+  );
   assert.deepEqual(
     run(['interpret', directory, artifact.id]),
     JSON.parse(

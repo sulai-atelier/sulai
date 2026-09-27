@@ -1,17 +1,21 @@
 #!/usr/bin/env node
 import { readClaudeCodeSessionArtifact } from './experimental.js';
 import {
-  importArtifactFile,
+  importPath,
   initializeProject,
   inspectArtifact,
+  inspectOccurrence,
   inspectProject,
   interpretConversation,
 } from './project.js';
 
 const usage = `Usage:
   sulai init <directory>
-  sulai import <directory> <file>              store exact bytes, no interpretation
-  sulai inspect <directory> [artifact-id]      verify stored identity and integrity
+  sulai import <directory> <path>              preserve a file or a directory and
+                                               record the acquisition
+  sulai inspect <directory> [id]               verify stored identity and integrity
+                                               of the project, an artifact, or an
+                                               occurrence
   sulai interpret <directory> <artifact-id>    read an artifact as a conversation
 
 Experimental, unstable, may be removed:
@@ -19,11 +23,17 @@ Experimental, unstable, may be removed:
                                                structure of a Claude Code local
                                                session transcript, never its text
 
-Import preserves any bytes. Interpretation is a separate step, so material that
-no current reader understands is still stored faithfully and can be re-derived
-later. The only stable interpreter today is the synthetic sulai.conversation.v1
-format.
+Import preserves any bytes and records one occurrence: what it attempted, the
+exact bytes each input became, and what it could not capture and why. It reads
+only the path given; it never follows links. A partial acquisition still prints
+its record and exits with status 3. Interpretation is a separate step, so
+material that no current reader understands is still stored faithfully and can
+be re-derived later. The only stable interpreter today is the synthetic
+sulai.conversation.v1 format.
 `;
+
+/** Exit status for an acquisition that recorded inputs it could not capture. */
+const PARTIAL_ACQUISITION = 3;
 
 async function main(args: string[]): Promise<void> {
   if (
@@ -44,6 +54,7 @@ async function main(args: string[]): Promise<void> {
     return;
   }
   let result: unknown;
+  let skipped = 0;
   if (command === 'init' && directory !== undefined && args.length === 2) {
     result = await initializeProject(directory);
   } else if (
@@ -52,7 +63,9 @@ async function main(args: string[]): Promise<void> {
     operand !== undefined &&
     args.length === 3
   ) {
-    result = await importArtifactFile(directory, operand);
+    const imported = await importPath(directory, operand);
+    skipped = imported.skipped.length;
+    result = imported;
   } else if (
     command === 'inspect' &&
     directory !== undefined &&
@@ -62,7 +75,9 @@ async function main(args: string[]): Promise<void> {
     result =
       operand === undefined
         ? await inspectProject(directory)
-        : await inspectArtifact(directory, operand);
+        : operand.startsWith('occurrence:')
+          ? await inspectOccurrence(directory, operand)
+          : await inspectArtifact(directory, operand);
   } else if (
     command === 'interpret' &&
     directory !== undefined &&
@@ -74,6 +89,12 @@ async function main(args: string[]): Promise<void> {
     throw new Error(usage.trimEnd());
   }
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+  if (skipped > 0) {
+    process.stderr.write(
+      `sulai: partial acquisition: ${skipped} input(s) could not be captured; see "skipped"\n`,
+    );
+    process.exitCode = PARTIAL_ACQUISITION;
+  }
 }
 
 try {

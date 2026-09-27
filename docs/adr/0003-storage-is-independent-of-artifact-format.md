@@ -1,7 +1,9 @@
 # ADR 0003: Storage is independent of artifact format
 
 Status: Accepted. The storage read ceiling is superseded by
-[ADR 0004](0004-streaming-preservation-without-a-storage-ceiling.md); everything else stands.
+[ADR 0004](0004-streaming-preservation-without-a-storage-ceiling.md). The deferred import occurrence and
+the `created` trap are resolved by [ADR 0005](0005-import-occurrences-record-acquisition-events.md), which
+also moves the marker to version 3. Everything else stands.
 
 Supersedes the storage assumptions in the initial implementation, not ADR 0001 or ADR 0002.
 
@@ -78,7 +80,8 @@ means "a new content-addressed artifact was written." Once occurrences exist, im
 bytes a second time will create **no new artifact and still create a new import occurrence**. So
 `created: false` must not be read as "nothing happened," and the return shape will need to distinguish
 the two. This follows directly from `same bytes != same import event` above; it is flagged here
-because the current single boolean quietly conflates them.
+because the current single boolean quietly conflates them. _Resolved by ADR 0005: the CLI now records
+an occurrence per import and reports new and existing artifacts separately._
 
 Reads size their buffer from the file's observed size rather than the permitted ceiling, and refuse a
 file whose size changes mid-read, since content addressing cannot describe a torn view. Reads are

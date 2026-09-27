@@ -96,6 +96,8 @@ publication: publication does not validate at all.
     project.json
     artifacts/
       <64-character-sha256-digest>.raw
+    occurrences/
+      <64-character-sha256-digest>.json
     tmp/
 ```
 
@@ -103,15 +105,17 @@ publication: publication does not validate at all.
 format marker written and validated by the CLI, not user-editable configuration:
 
 ```text
-{"format":"sulai.project","version":2}
+{"format":"sulai.project","version":3}
 ```
 
 The marker describes the **storage** format and deliberately says nothing about
 the format of the artifacts inside, because an artifact is exact bytes of any
-kind. Version 1 embedded `artifactFormat`; version 1 projects are refused with a
-specific message, and this pre-alpha does not migrate them. The marker's version
-is not an accepted project state version. No accepted state is recorded by this
-CLI. See [ADR 0003](adr/0003-storage-is-independent-of-artifact-format.md).
+kind. Version 1 embedded `artifactFormat`; version 2 had no occurrence records.
+Both are refused with a specific message before anything in the project is
+touched, and this pre-alpha does not migrate them. The marker's version is not an
+accepted project state version. No accepted state is recorded by this CLI. See
+[ADR 0003](adr/0003-storage-is-independent-of-artifact-format.md) and
+[ADR 0005](adr/0005-import-occurrences-record-acquisition-events.md).
 
 `.sulai/tmp` is ephemeral. It is recreated on demand, so its absence does not
 make a project invalid. Storage directories are created with mode `0700`, which
@@ -136,10 +140,13 @@ If publication and cleanup both fail, the returned error retains both causes.
 
 `import` stores exact bytes and performs no format validation at all. Material
 that no current reader understands is preserved faithfully, so a later reader can
-re-derive from the untouched original rather than requiring a fresh import.
+re-derive from the untouched original rather than requiring a fresh import. Each
+import also records one occurrence, described below.
 
 `inspect` verifies that every stored artifact still hashes to the name it is
-stored under. It parses nothing.
+stored under, without parsing any artifact. It then verifies every occurrence the
+same way, parses it strictly, and checks that every artifact it names is stored at
+the size it records.
 
 `interpret` reads one artifact through one specific format. It may fail on bytes
 that were stored successfully, and that failure leaves the artifact untouched.
@@ -160,7 +167,9 @@ to the end is refused. That guard detects growth and truncation only; it does no
 detect another process overwriting bytes in place at the same length, so it is not
 an atomic snapshot of a live file. To move a project,
 copy the entire `.sulai` directory while imports are stopped; `.sulai/tmp` is
-ephemeral and need not be copied. Stored records contain no absolute paths.
+ephemeral and need not be copied. No artifact name or identity contains a path.
+Occurrence records do contain the absolute location of each acquisition root, as
+history; see below.
 
 This protocol requires local hard-link support (for example NTFS, APFS, or ext4)
 and fails if it is unavailable; there is no fallback that overwrites data. It does
@@ -168,3 +177,81 @@ not promise directory-entry durability after power loss, atomic multi-artifact
 transactions, or protection from another process editing storage. An interrupted
 import may leave an unpublished file in `tmp`; inspection ignores it. Recovery and
 cleanup policy are deferred. There is no automatic repair or deletion command.
+
+## Import occurrences
+
+An occurrence is an immutable record of one acquisition event. It is separate from
+artifact identity: the same bytes can arrive in many events, and each event is
+recorded. See [ADR 0005](adr/0005-import-occurrences-record-acquisition-events.md).
+
+`sulai import <project> <path>` takes a file or a directory. A directory is walked
+recursively and each regular file under it is preserved. A file is a one-entry
+occurrence whose single entry has the empty path, meaning the root itself.
+
+The record is one line of compact JSON followed by one LF, with the fields in this
+order and no others:
+
+| Field        | Meaning                                                                      |
+| ------------ | ---------------------------------------------------------------------------- |
+| `format`     | `"sulai.occurrence"`                                                         |
+| `version`    | `1`                                                                          |
+| `nonce`      | 32 lowercase hexadecimal characters, random per acquisition                  |
+| `startedAt`  | acquisition start, `YYYY-MM-DDTHH:MM:SS.sssZ`, the acquiring machine's clock |
+| `finishedAt` | acquisition end, same form, not before `startedAt`                           |
+| `status`     | `"partial"` exactly when `skipped` is nonempty, otherwise `"complete"`       |
+| `roots`      | nonempty; each `{id, kind, platform, locator}`                               |
+| `entries`    | captured inputs; each `{root, path, artifact, byteLength, modifiedAt, new}`  |
+| `skipped`    | inputs found but not captured; each `{root, path, reason}`                   |
+| `excluded`   | inputs deliberately not walked; each `{root, path, reason}`                  |
+
+Roots are numbered `r1`, `r2` and so on, in order. `kind` is `file` or
+`directory`. `platform` is the acquiring platform, such as `linux`, `darwin` or
+`win32`. It says how to read `locator`, which is the absolute path of the root as
+observed at acquisition. The locator is history: it never enters artifact identity,
+and Sulai never opens it again.
+
+Paths are relative to their root and `/`-separated. They have no empty, `.` or `..`
+segments. Only a file root uses the empty path, and a file root records exactly one
+input. `artifact` is an `ArtifactId`. `byteLength` is its size. `modifiedAt` is the
+filesystem's modification time when the input was read, unverified. `new` says
+whether this acquisition added the bytes to the store, and entries with the same
+artifact agree on it.
+
+Skip reasons:
+
+| Reason                | Meaning                                                             |
+| --------------------- | ------------------------------------------------------------------- |
+| `symbolic-link`       | a link or junction, never followed                                  |
+| `not-regular-file`    | a device, socket, pipe or similar                                   |
+| `unreadable`          | permission denied, locked, or a read error                          |
+| `vanished`            | listed, then gone before it could be read                           |
+| `changed-during-read` | its size changed while it was read, or its type after it was listed |
+| `non-utf8-name`       | a name that is not valid UTF-8                                      |
+
+A non-UTF-8 name is recorded through a lossy decoding, so two such names can
+coincide. That is the only case in which two records may share a path. The only
+exclusion reason is `project-store`: the project's own `.sulai` directory when it
+lies inside a root.
+
+Entries, skipped inputs and exclusions are each sorted by root and then by the
+UTF-8 bytes of the path, without duplicates. No input is both captured and excluded,
+and nothing is recorded inside an excluded directory. Every string is well-formed
+Unicode.
+
+A record is accepted only if it is byte-for-byte the canonical encoding above, so
+each record has one encoding. Its identity is `occurrence:v1:` followed by the
+SHA-256 of those bytes, and it is stored as `occurrences/<digest>.json`. In-memory
+reads of one record are limited to 64 MiB.
+
+Acquisition order: each input is streamed and published as an artifact first, and
+the occurrence is published last, by the same never-replace hard-link protocol. A
+failure of the store stops the acquisition before any record is written, leaving
+at most unreferenced artifacts. An input that cannot be captured is skipped and
+the walk continues. The walk is not atomic. Inputs that appear during it may be
+missed, and `complete` means everything the walk found was captured. It never means
+a snapshot of one instant.
+
+The CLI prints `occurrenceId`, `status`, `root`, `entryCount`, `newArtifacts`,
+`existingArtifacts`, `skipped` and `excluded`. A partial acquisition exits with
+status 3 and still prints its record. `sulai inspect <project> <occurrence-id>`
+prints the full record after verifying it and every artifact it names.

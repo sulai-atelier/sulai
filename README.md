@@ -12,11 +12,12 @@ traceable, versioned project state. The project, not the chat, is the durable un
 ## Status
 
 Sulai is pre-alpha. The repository implements the source-preservation foundation:
-immutable content-addressed artifacts, byte-precise source references, and
-format-independent integrity-checked local storage. Storage accepts exact bytes
-of any kind; reading them through a format is a separate, named operation, and
-the only reader today is a synthetic conversation format. Provider imports,
-import-occurrence provenance, and reconciliation are future work.
+immutable content-addressed artifacts, byte-precise source references,
+format-independent integrity-checked local storage, and import occurrences that
+record each acquisition as its own event. Storage accepts exact bytes of any kind;
+reading them through a format is a separate, named operation, and the only reader
+today is a synthetic conversation format. Provider adapters, semantic objects, and
+reconciliation are future work.
 
 The APIs and project format are evolving. This is not a production-ready release.
 
@@ -36,7 +37,7 @@ Sulai is being developed toward workflows where independently evolved work, such
 as separate ChatGPT and Claude project histories, can be imported, compared,
 reconciled, reviewed, and continued as one versioned project.
 
-The next focus is provenance-aware imports and provider adapters. See the
+The next focus is provider adapters built on those imports. See the
 [public roadmap](ROADMAP.md) for the intended sequence and scope.
 
 ## Try the current foundation
@@ -52,10 +53,13 @@ npm run cli -- import .tmp/example fixtures/synthetic.conversation.jsonl
 npm run cli -- inspect .tmp/example
 ```
 
-The import prints an artifact ID. `inspect` verifies stored identity without
-parsing anything. To read that artifact through the conversation format, and see
-its decoded messages, source units and exact raw records, substitute the ID for
-`ARTIFACT_ID`:
+The import prints an occurrence: the record of that acquisition, with how many
+inputs it captured, how many of their byte sequences were new to the store, and
+anything it could not capture. `import` also takes a directory, which it walks
+without following links. `inspect` verifies every stored artifact and occurrence
+without parsing any artifact, and lists the artifact IDs. To read the artifact
+through the conversation format, and see its decoded messages, source units and
+exact raw records, substitute its ID for `ARTIFACT_ID`:
 
 ```sh
 npm run cli -- interpret .tmp/example ARTIFACT_ID
@@ -68,9 +72,12 @@ why `interpret` is a separate command, and why it can fail on bytes that were
 stored successfully without affecting them. See
 [ADR 0003](docs/adr/0003-storage-is-independent-of-artifact-format.md).
 
-Commands emit JSON; failures go to stderr with exit code 1. Reimporting identical
-bytes reuses the artifact. Initialization and import never replace existing
-stored content. Inspection checks the stored content against its identity.
+Commands emit JSON; failures go to stderr with exit code 1. An import that could
+not capture everything still records what it did and exits with code 3. Reimporting
+identical bytes reuses the artifact and records a new occurrence. Initialization
+and import never replace existing stored content. Inspection checks the stored
+content against its identity. See
+[ADR 0005](docs/adr/0005-import-occurrences-record-acquisition-events.md).
 
 Storage accepts any bytes. The only **interpreter** is the documented
 [synthetic conversation format](docs/source-format.md), exercised by

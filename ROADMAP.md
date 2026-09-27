@@ -10,9 +10,9 @@ The repository provides immutable byte artifacts, deterministic source reference
 and a local CLI whose storage is independent of any artifact format. Import
 preserves arbitrary exact bytes, inspection verifies identity without parsing, and
 interpretation is a separate command that today understands only a synthetic
-conversation format. It is a reference foundation, not yet a general
-provider-import or project-state system, and it records no import occurrence: how
-material entered a project is not yet represented.
+conversation format. Each import records an occurrence: which inputs were attempted,
+which exact bytes each became, and what could not be captured and why. It is a
+reference foundation, not yet a provider-import or project-state system.
 
 ## Intended sequence
 
