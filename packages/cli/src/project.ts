@@ -485,31 +485,45 @@ function decodeUnit(
 }
 
 /**
- * An interpretation, deliberately separate from storage. Preservation happened
- * at import; this reads stored bytes through one specific format and can be
- * changed or replaced without touching what was preserved.
+ * Loads one stored artifact into memory for a reader that needs all of it,
+ * after refusing it from filesystem metadata alone if it exceeds that reader's
+ * limit, and after verifying it still has the identity it is stored under.
+ * Storage has no ceiling, so any reader that buffers must bound itself here.
  */
-export async function interpretConversation(directory: string, value: unknown) {
+export async function readStoredArtifact(
+  directory: string,
+  value: unknown,
+  limit: number,
+): Promise<Artifact> {
   const project = await loadProject(directory);
   const id = parseArtifactId(value);
   const path = artifactPath(project.artifacts, id);
-  // Refuse on size from metadata alone. Storage has no ceiling, so a stored
-  // artifact can be far larger than this format accepts, and it must be
-  // refused without being read into memory.
   const { size } = await lstat(path);
-  if (size > MAX_CONVERSATION_BYTES) {
+  if (size > limit) {
     throw new ValidationError(
-      `Artifact is ${size} bytes; this format accepts at most ${MAX_CONVERSATION_BYTES}`,
+      `Artifact is ${size} bytes; this format accepts at most ${limit}`,
     );
   }
-  const artifact = new Artifact(
-    await readBounded(path, MAX_CONVERSATION_BYTES),
-  );
+  const artifact = new Artifact(await readBounded(path, limit));
   if (artifact.id !== id) {
     throw new ValidationError(
       'Stored artifact hash does not match its identity',
     );
   }
+  return artifact;
+}
+
+/**
+ * An interpretation, deliberately separate from storage. Preservation happened
+ * at import; this reads stored bytes through one specific format and can be
+ * changed or replaced without touching what was preserved.
+ */
+export async function interpretConversation(directory: string, value: unknown) {
+  const artifact = await readStoredArtifact(
+    directory,
+    value,
+    MAX_CONVERSATION_BYTES,
+  );
   const conversation: ImportedConversation = importConversation(
     artifact.bytes(),
   );

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readClaudeCodeSessionArtifact } from './experimental.js';
 import {
   importArtifactFile,
   initializeProject,
@@ -13,12 +14,30 @@ const usage = `Usage:
   sulai inspect <directory> [artifact-id]      verify stored identity and integrity
   sulai interpret <directory> <artifact-id>    read an artifact as a conversation
 
+Experimental, unstable, may be removed:
+  sulai experimental claude-code-session <directory> <artifact-id>
+                                               structure of a Claude Code local
+                                               session transcript, never its text
+
 Import preserves any bytes. Interpretation is a separate step, so material that
 no current reader understands is still stored faithfully and can be re-derived
-later. The only interpreter today is the synthetic sulai.conversation.v1 format.
+later. The only stable interpreter today is the synthetic sulai.conversation.v1
+format.
 `;
 
 async function main(args: string[]): Promise<void> {
+  if (
+    args[0] === 'experimental' &&
+    args[1] === 'claude-code-session' &&
+    args.length === 4
+  ) {
+    const result = await readClaudeCodeSessionArtifact(
+      args[2] as string,
+      args[3],
+    );
+    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    return;
+  }
   const [command, directory, operand] = args;
   if (args.length === 0 || (args.length === 1 && command === '--help')) {
     process.stdout.write(usage);

@@ -678,3 +678,36 @@ test('CLI rejects unreadable interpretation without echoing source content', asy
   // The artifact is still there and still exact.
   assert.equal((await inspectProject(directory)).artifacts.length, 1);
 });
+
+test('the experimental Claude Code command reports structure and never message text', async (t) => {
+  const directory = await temporary(t);
+  await initializeProject(directory);
+  const session = fileURLToPath(
+    new URL(
+      '../../../fixtures/synthetic.claude-code-session.jsonl',
+      import.meta.url,
+    ),
+  );
+  const imported = await importArtifactFile(directory, session);
+  const result = spawnSync(
+    process.execPath,
+    [cli, 'experimental', 'claude-code-session', directory, imported.id],
+    { encoding: 'utf8' },
+  );
+  assert.ifError(result.error);
+  assert.equal(result.status, 0, result.stderr);
+  const reading = JSON.parse(result.stdout) as {
+    recordCount: number;
+    kinds: Record<string, number>;
+    unknownTypes: string[];
+  };
+  assert.equal(reading.recordCount, 14);
+  assert.deepEqual(reading.kinds, {
+    metadata: 2,
+    message: 10,
+    unknown: 1,
+    unparseable: 1,
+  });
+  assert.deepEqual(reading.unknownTypes, ['synthetic-future-record']);
+  assert.doesNotMatch(result.stdout, /Synthetic (request|reasoning|file body)/);
+});

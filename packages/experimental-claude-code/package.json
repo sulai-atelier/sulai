@@ -1,0 +1,28 @@
+{
+  "name": "@sulai/experimental-claude-code",
+  "version": "0.0.0",
+  "private": true,
+  "description": "EXPERIMENTAL structural reader for Claude Code local session transcripts. Not part of the Sulai storage model.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sulai-atelier/sulai.git",
+    "directory": "packages/experimental-claude-code"
+  },
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=24.21.0 <25"
+  },
+  "dependencies": {
+    "@sulai/core": "0.0.0"
+  }
+}

@@ -20,6 +20,7 @@
     "node": ">=24.21.0 <25"
   },
   "dependencies": {
-    "@sulai/core": "0.0.0"
+    "@sulai/core": "0.0.0",
+    "@sulai/experimental-claude-code": "0.0.0"
   }
 }
