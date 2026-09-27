@@ -13,7 +13,7 @@ List the commands, tests, or other checks run and their results.
 ## Compatibility and provenance
 
 Describe effects on stored bytes, identities, source references, formats, public
-APIs, or acceptance semantics. State explicitly if none are affected.
+APIs, or project-state semantics. State explicitly if none are affected.
 
 ## Review checklist
 

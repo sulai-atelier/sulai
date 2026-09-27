@@ -1,7 +1,7 @@
 # Coding agent instructions
 
-Sulai preserves the evolving semantic state of human and AI projects. This
-repository is an early foundation for infrastructure, not a generic chat app.
+Sulai tracks how projects that people and AI systems work on together evolve.
+This repository is an early foundation for infrastructure, not a generic chat app.
 
 Read [docs/principles.md](docs/principles.md) for the canonical product invariants,
 [CONTRIBUTING.md](CONTRIBUTING.md) for review and public-documentation rules, and
@@ -25,9 +25,15 @@ making changes. Apply those rules to code, documentation, issues, and commits.
 - Scope this foundation to source artifacts, references, import occurrences, and
   local import/inspect/interpret. Acquisition reads only the roots a user names:
   never follow links, and never acquire a path because content refers to it. See
-  [ADR 0005](docs/adr/0005-import-occurrences-record-acquisition-events.md). Semantic extraction, reconciliation, accepted state,
-  and hosted features need separate designs and requests. Do not silently expand
-  scope.
+  [ADR 0005](docs/adr/0005-import-occurrences-record-acquisition-events.md). Project-state reconstruction, semantic extraction,
+  reconciliation, provider adapters, and hosted features need separate designs and
+  requests. Do not silently expand scope.
+- Foundation work is paused at storage format version 3; change it only when a
+  request calls for it. The experimental Claude Code reader stays as it is: do not
+  extend it or build on it without a request.
+- Do not add a notion of who decided or who owns an idea. Accepted state and
+  explicit acceptance were retired; see
+  [ADR 0002](docs/adr/0002-source-meaning-state-separation.md).
 - Storage never depends on an artifact format. Import preserves exact bytes and
   validates nothing; inspection verifies identity and parses nothing;
   interpretation is separate and may fail without affecting what was preserved.

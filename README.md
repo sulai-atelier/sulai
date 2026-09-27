@@ -14,31 +14,54 @@ traceable, versioned project state. The project, not the chat, is the durable un
 Sulai is pre-alpha. The repository implements the source-preservation foundation:
 immutable content-addressed artifacts, byte-precise source references,
 format-independent integrity-checked local storage, and import occurrences that
-record each acquisition as its own event. Storage accepts exact bytes of any kind;
-reading them through a format is a separate, named operation, and the only reader
-today is a synthetic conversation format. Provider adapters, semantic objects, and
-reconciliation are future work.
+record each acquisition as its own event, including several roots at once. Storage
+accepts exact bytes of any kind; reading them through a format is a separate, named
+operation. The only stable reader is a synthetic conversation format. An
+experimental reader for Claude Code local session transcripts also ships, in its
+own package and behind an `experimental` command (see below). Nothing above source
+preservation is implemented: Sulai does not yet derive project changes or project
+state from what it preserves.
+
+Foundation work is paused at storage format version 3; see [Direction](#direction).
 
 The APIs and project format are evolving. This is not a production-ready release.
 
 ## Principles
 
-- Preserve original source; keep derived meaning traceable to it.
-- Require explicit acceptance; distinguish model consensus from evidentiary support.
-- Preserve history, including superseded work and unresolved conflicts.
-- Make project-state changes versioned, reviewable, reconstructable, and portable.
-- Remain model-neutral, without relying on hidden model chain-of-thought.
+- Preserve original source; keep everything derived from it traceable to it.
+- Track how the project evolves, not who owned each thought. Human and AI
+  reasoning mix, and Sulai does not try to split them.
+- Do not judge truth. Project state is what Sulai can reconstruct from evidence,
+  not an objective verdict; consensus is not evidentiary support.
+- Preserve history, including superseded work, unresolved conflicts, and
+  uncertainty.
+- Cost users less effort than the coordination it saves them.
+- Remain model-neutral, portable, and independent of hidden model chain-of-thought.
 
 The [project principles](docs/principles.md) define these requirements in full.
 
 ## Direction
 
-Sulai is being developed toward workflows where independently evolved work, such
-as separate ChatGPT and Claude project histories, can be imported, compared,
-reconciled, reviewed, and continued as one versioned project.
+Sulai is being developed so that a project worked on across people, models,
+tools, documents, and code stays understandable and continuable: where it stands
+now, what is open, what changed, where its sources diverge, and the evidence for
+each.
 
-The next focus is provider adapters built on those imports. See the
-[public roadmap](ROADMAP.md) for the intended sequence and scope.
+A pilot on Sulai's own development, with its evaluation fixed in advance, asked
+whether a small, evidence-backed picture of where a project stands can be rebuilt
+from its observable work, without the user maintaining it and without claiming
+objective truth. It passed both of its stages on that one project. That is one
+project, not evidence that the approach works in general.
+
+The next work is the smallest practical project-state primitive that can reproduce
+that value: show where a project stands, each part traceable to its evidence. Its
+internal representation is still open and will be earned from implementation and
+further use.
+
+Earlier versions of this README named provider adapters as the next focus. A
+second source remains important, through official provider exports, but it is no
+longer next. See the [public roadmap](ROADMAP.md) for the sequence and what
+changed.
 
 ## Try the current foundation
 
@@ -79,26 +102,37 @@ and import never replace existing stored content. Inspection checks the stored
 content against its identity. See
 [ADR 0005](docs/adr/0005-import-occurrences-record-acquisition-events.md).
 
-Storage accepts any bytes. The only **interpreter** is the documented
+Storage accepts any bytes. The only stable **interpreter** is the documented
 [synthetic conversation format](docs/source-format.md), exercised by
 [the synthetic fixture](fixtures/synthetic.conversation.jsonl). No data is sent to
 a model or external service by the CLI.
 
+`sulai experimental claude-code-session <directory> <artifact-id>` reads a stored
+Claude Code local session transcript and reports its structure only, never its
+message text. That file layout is another product's internal detail, not a
+published format, so the command is unstable and may be removed. See
+[its package README](packages/experimental-claude-code/README.md).
+
 ## Architecture and specifications
 
 The core library lives in `packages/core`; local persistence and the CLI live in
-`packages/cli`. Neither has third-party runtime dependencies. Packages are not
-published to npm yet.
+`packages/cli`. The experimental Claude Code reader lives in
+`packages/experimental-claude-code`; the CLI depends on it, and core cannot import
+it. None has third-party runtime dependencies. Packages are not published to npm
+yet.
 
 [Source identity and storage conventions](docs/source-format.md) describe the
-current format. The [foundational ADRs](docs/adr/) record the decisions to preserve
-immutable raw artifacts and separate source, derived meaning, and accepted state.
+current format. The [ADRs](docs/adr/) record the decisions to preserve immutable
+raw artifacts, keep storage independent of artifact format, stream preservation,
+and record each acquisition as an occurrence. ADR 0002 separated source, derived
+meaning, and accepted state; its accepted-state layer has since been retired, as
+the ADR records.
 
 ## Contributing
 
 Focused contributions, bug reports, synthetic test cases, and technical discussion
-are welcome. Changes affecting persistent formats, provenance, authority, or
-project-state semantics require deliberate review.
+are welcome. Changes affecting persistent formats, provenance, or project-state
+semantics require deliberate review.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for setup and review expectations,
 [GOVERNANCE.md](GOVERNANCE.md) for decision-making, and the

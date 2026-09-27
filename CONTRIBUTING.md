@@ -15,7 +15,7 @@ existing discussion before opening another. Security reports belong in the
 private channels described in [SECURITY.md](SECURITY.md), not public issues.
 
 Discuss substantial changes with a maintainer before investing in an implementation,
-especially changes to persistent formats, source mappings, or acceptance semantics.
+especially changes to persistent formats, source mappings, or project-state semantics.
 Agreement on a problem is not approval of every proposed implementation.
 
 Submit a focused pull request explaining the problem, behavior change, validation,
@@ -35,7 +35,7 @@ npm run typecheck
 npm test
 ```
 
-`typecheck` builds both packages and checks the tests. `test` builds the packages
+`typecheck` builds all packages and checks the tests. `test` builds the packages
 and uses Node's built-in test runner with TypeScript support. Tests exercise the
 built package boundary and run the compiled CLI in separate processes. Temporary
 projects are isolated and removed after each test.
@@ -45,9 +45,10 @@ directories, local project stores, or machine-specific tooling.
 
 ## Dependencies
 
-npm workspaces and TypeScript project references are sufficient for two packages;
-there is no separate monorepo orchestrator or bundler. Runtime code uses Node
-built-ins, with the CLI depending only on the local core package.
+npm workspaces and TypeScript project references are sufficient for three
+packages; there is no separate monorepo orchestrator or bundler. Runtime code uses
+Node built-ins. The CLI depends only on the local core and experimental Claude
+Code packages, and the experimental package only on core. Core depends on neither.
 
 Development dependencies have these purposes:
 

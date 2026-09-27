@@ -112,8 +112,8 @@ The marker describes the **storage** format and deliberately says nothing about
 the format of the artifacts inside, because an artifact is exact bytes of any
 kind. Version 1 embedded `artifactFormat`; version 2 had no occurrence records.
 Both are refused with a specific message before anything in the project is
-touched, and this pre-alpha does not migrate them. The marker's version is not an
-accepted project state version. No accepted state is recorded by this CLI. See
+touched, and this pre-alpha does not migrate them. The marker's version is not a
+project state version. No project state is recorded by this CLI. See
 [ADR 0003](adr/0003-storage-is-independent-of-artifact-format.md) and
 [ADR 0005](adr/0005-import-occurrences-record-acquisition-events.md).
 

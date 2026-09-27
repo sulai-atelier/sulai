@@ -18,7 +18,7 @@ body:
     id: approach
     attributes:
       label: Proposed approach and alternatives
-      description: Explain the tradeoffs and affected source, provenance, or acceptance boundaries.
+      description: Explain the tradeoffs and affected source, provenance, or project-state boundaries.
     validations:
       required: true
   - type: textarea

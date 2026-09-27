@@ -46,12 +46,17 @@ detects growth and truncation only; an in-place overwrite at the same length is 
 detected, so do not rely on capturing a file another process is still writing. Stored content integrity
 does not depend on that check, because it is verified by SHA-256.
 
-`interpret` is the only command that parses, and only through the versioned
+`interpret` is the only stable command that parses, and only through the versioned
 synthetic conversation format, which limits input to 1 MiB and 10,000 messages and
 rejects malformed references. Its output is JSON **including source content**, so
 treat captured stdout as potentially sensitive. `inspect` verifies identity and
 never emits stored content, though inspecting an occurrence prints its paths and
 root locations.
+
+`experimental claude-code-session` also parses, leniently, as an unstable reader
+of Claude Code local session transcripts. It holds the whole transcript in memory
+and refuses transcripts over 64 MiB. Its output is structure only, never message
+text, but it includes record identifiers and content block types.
 
 Stored bytes are hashed on inspection. Imports never overwrite existing artifact
 paths. Hashes establish byte identity and detect a mismatch; they do not establish

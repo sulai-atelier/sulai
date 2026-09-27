@@ -1,7 +1,8 @@
 # Roadmap
 
-Sulai aims to make independently evolved human and AI work reviewable as one
-traceable, versioned project. This roadmap describes intended outcomes, not release
+Sulai aims to keep a project that people and AI systems work on together
+understandable and continuable: where it stands now, how it got there, and the
+evidence for each part. This roadmap describes intended outcomes, not release
 dates or a commitment to a particular implementation.
 
 ## Current foundation
@@ -11,10 +12,51 @@ and a local CLI whose storage is independent of any artifact format. Import
 preserves arbitrary exact bytes, inspection verifies identity without parsing, and
 interpretation is a separate command that today understands only a synthetic
 conversation format. Each import records an occurrence: which inputs were attempted,
-which exact bytes each became, and what could not be captured and why. It is a
-reference foundation, not yet a provider-import or project-state system.
+which exact bytes each became, and what could not be captured and why. One
+occurrence can hold several roots. An experimental, unstable reader reports the
+structure of Claude Code local session transcripts. It is a reference foundation,
+not yet a project-state system.
 
-## Intended sequence
+Foundation work is paused at storage format version 3. Further changes to it wait
+for a need that the project-state work shows.
+
+## Next: the smallest practical status primitive
+
+A pilot on Sulai's own development, with its evaluation fixed in advance, asked
+whether Sulai can keep a small, useful picture of where a project stands, rebuilt
+from the project's observable work, without the user maintaining it and without
+claiming objective truth. It passed both of its stages on that one project. A page
+rebuilt from evidence held up against a hand-kept one and caught drift the
+hand-kept one missed. As a handoff for one real task it did at least as well, with
+less unnecessary change. That is one project and one task, not evidence that the
+approach works in general.
+
+The next work is the smallest practical project-state primitive that can reproduce
+that value: show where a project stands, each part traceable to its evidence. Its
+internal representation is still open and will be earned from implementation and
+further use.
+
+The pilot did not classify who said or decided something. Speaker and authorship
+are not the axis that determines project state.
+
+## Later
+
+- **A second source.** Still important, but no longer next. Its job is to test
+  whether a state model learned on one project holds when the evidence has a very
+  different structure. Official provider exports remain the intended path.
+- **Divergent work.** Comparing independently evolved work, and surfacing conflicts
+  that matter without manufacturing agreement, remains part of the direction. Its
+  design waits on the first status primitive.
+- **The experimental Claude Code reader** stays as it is: kept, not extended,
+  until a concrete need requires more from it.
+
+Each step should be validated with concrete cases before the next abstraction is
+fixed. Benchmarks should publish reproducible methodology and data that is safe
+and permitted to share; repository fixtures remain synthetic.
+
+## Earlier sequence
+
+Until September 2026 this roadmap followed this sequence, kept here as it was:
 
 1. **Source preservation.** Harden exact-byte storage, source resolution, and
    portability. Keep raw persistence independent of provider interpretations.
@@ -32,9 +74,21 @@ reference foundation, not yet a provider-import or project-state system.
 6. **Versioned project state.** Record explicit acceptance and retain enough history
    to reconstruct, compare, and continue a project's evolving state.
 
-Each stage should be validated with concrete cases before the next abstraction is
-fixed. Benchmarks should publish reproducible methodology and data that is safe
-and permitted to share; repository fixtures remain synthetic.
+The first two are what the current foundation implements.
+
+The rest was set aside for two reasons. Provider adapters were no longer the most
+useful next step: the question of whether Sulai can represent where one project
+stands comes first, and a second source is more valuable as a test of that answer.
+And the explicit-acceptance model, in which a project's state is whatever someone
+with authority has accepted, was retired. Human and AI reasoning mix and cannot be
+cleanly split by who contributed what, so Sulai tracks how the project evolves
+rather than who owns each thought. See
+[ADR 0002](docs/adr/0002-source-meaning-state-separation.md).
+
+Replaying history as context was also tried and set aside. Early internal trials
+that packed reconstructed history into a new session did not meet the bars set for
+them in advance, and that approach is stopped. The trials used private project
+material, so their data is not published here.
 
 ## Discussing direction
 
