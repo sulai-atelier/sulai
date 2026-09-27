@@ -1,6 +1,7 @@
 # ADR 0003: Storage is independent of artifact format
 
-Status: Accepted
+Status: Accepted. The storage read ceiling is superseded by
+[ADR 0004](0004-streaming-preservation-without-a-storage-ceiling.md); everything else stands.
 
 Supersedes the storage assumptions in the initial implementation, not ADR 0001 or ADR 0002.
 
@@ -43,7 +44,8 @@ name it is stored under, without parsing any of it.
 specific format. It can fail, be changed, or be replaced without affecting what was preserved.
 
 The storage read ceiling (`MAX_ARTIFACT_BYTES`) is a property of the local store, distinct from
-`MAX_CONVERSATION_BYTES`, which is a property of one format.
+`MAX_CONVERSATION_BYTES`, which is a property of one format. _Superseded by ADR 0004: storage now
+streams and has no ceiling. The distinction from a format limit holds._
 
 `Artifact.slice()` copies a single half-open range, so resolving a reference costs the size of the
 range rather than the size of the artifact.
@@ -82,7 +84,8 @@ Reads size their buffer from the file's observed size rather than the permitted 
 file whose size changes mid-read, since content addressing cannot describe a torn view. Reads are
 still fully buffered, so `MAX_ARTIFACT_BYTES` bounds memory rather than expressing a real capability.
 Exports larger than the ceiling need streaming identity before the limit can rise usefully; raising
-the constant alone would not help. This is a known limitation, not a design position.
+the constant alone would not help. This is a known limitation, not a design position. _Resolved by
+ADR 0004, prompted by a real 109.7 MB session transcript that this ceiling refused._
 
 Containers are permitted by this model but not implemented. An entry extracted from an archive is a
 new artifact derived from the archive artifact, recorded with the extraction method. Decompressed

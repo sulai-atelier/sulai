@@ -22,10 +22,16 @@ the private report.
 
 The CLI runs locally and does not send data over the network.
 
-**Import accepts arbitrary bytes and performs no format validation**, bounded by a
-64 MiB local-store ceiling. Storing material is not an assertion that it is
+**Import accepts arbitrary bytes and performs no format validation.** It streams,
+holding at most 1 MiB of an artifact in memory, and has no size ceiling: the limit
+is available disk space. Storing material is not an assertion that it is
 meaningful or safe. Raw content is never executed, and no stored bytes are parsed
 unless a command explicitly interprets them.
+
+A file that changes size while it is being read is refused. That detects growth
+and truncation only; an in-place overwrite at the same length is not detected, so
+do not import a file another process is still writing. Stored content integrity
+does not depend on that check, because it is verified by SHA-256.
 
 `interpret` is the only command that parses, and only through the versioned
 synthetic conversation format, which limits input to 1 MiB and 10,000 messages and

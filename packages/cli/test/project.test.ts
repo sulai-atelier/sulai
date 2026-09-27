@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import {
   mkdtemp,
@@ -7,6 +8,7 @@ import {
   readdir,
   rename,
   rm,
+  stat,
   symlink,
   writeFile,
 } from 'node:fs/promises';
@@ -16,9 +18,13 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import type { TestContext } from 'node:test';
-import { importConversation, ValidationError } from '@sulai/core';
 import {
-  MAX_ARTIFACT_BYTES,
+  MAX_CONVERSATION_BYTES,
+  importConversation,
+  ValidationError,
+} from '@sulai/core';
+import {
+  STREAM_CHUNK_BYTES,
   importArtifactFile,
   initializeProject,
   inspectArtifact,
@@ -319,21 +325,105 @@ test('the filesystem round trip preserves CRLF, whitespace, Unicode, and no fina
   assert.deepEqual(await readFile(storedFile(directory, imported.id)), raw);
 });
 
-test('oversized files and directories leave no artifact or temporary files', async (t) => {
+test('an artifact larger than the former 64 MiB ceiling is preserved by streaming', async (t) => {
+  // The 64 MiB buffered ceiling was removed because real AI session history
+  // already exceeds it. This writes the file and computes its identity
+  // independently, a block at a time, so neither side holds it in memory.
   const directory = await temporary(t);
   await initializeProject(directory);
-  const filename = join(directory, 'oversize.bin');
-  await writeFile(filename, Buffer.alloc(MAX_ARTIFACT_BYTES + 1));
-  await assert.rejects(
-    importArtifactFile(directory, filename),
-    ValidationError,
-  );
-  assert.deepEqual((await inspectProject(directory)).artifacts, []);
+  const filename = join(directory, 'large.bin');
+  const block = Buffer.alloc(1024 * 1024, 0x5a);
+  const blocks = 64;
+  const expected = createHash('sha256');
+  const handle = await fs.open(filename, 'w');
+  try {
+    for (let index = 0; index < blocks; index += 1) {
+      await handle.write(block);
+      expected.update(block);
+    }
+    const tail = Buffer.from([0x01]);
+    await handle.write(tail);
+    expected.update(tail);
+  } finally {
+    await handle.close();
+  }
+  const byteLength = blocks * block.byteLength + 1;
+  const id = `sha256:${expected.digest('hex')}`;
+
+  const imported = await importArtifactFile(directory, filename);
+  assert.deepEqual(imported, { id, byteLength, created: true });
+  assert.equal((await stat(storedFile(directory, id))).size, byteLength);
+  // Verification streams too, so inspecting it succeeds without loading it.
+  assert.deepEqual((await inspectProject(directory)).artifacts, [
+    { id, byteLength },
+  ]);
+  assert.deepEqual(await inspectArtifact(directory, id), { id, byteLength });
   assert.deepEqual(await temporaryEntries(directory), []);
+});
+
+test('streaming preserves exact bytes and identity across chunk boundaries', async (t) => {
+  // Content that differs at every offset, several chunks long with a ragged
+  // final chunk, so an off-by-one at a boundary changes the hash.
+  const directory = await temporary(t);
+  await initializeProject(directory);
+  const length = STREAM_CHUNK_BYTES * 3 + 12345;
+  const raw = Buffer.alloc(length);
+  for (let index = 0; index < length; index += 1) {
+    raw[index] = (index * 31 + (index >>> 8)) & 0xff;
+  }
+  const filename = join(directory, 'ragged.bin');
+  await writeFile(filename, raw);
+  const imported = await importArtifactFile(directory, filename);
+  assert.equal(
+    imported.id,
+    `sha256:${createHash('sha256').update(raw).digest('hex')}`,
+  );
+  assert.equal(imported.byteLength, length);
+  assert.deepEqual(await readFile(storedFile(directory, imported.id)), raw);
+});
+
+test('an empty file is preserved as the empty artifact', async (t) => {
+  const directory = await temporary(t);
+  await initializeProject(directory);
+  const filename = join(directory, 'empty.bin');
+  await writeFile(filename, Buffer.alloc(0));
+  const imported = await importArtifactFile(directory, filename);
+  assert.deepEqual(imported, {
+    id: 'sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+    byteLength: 0,
+    created: true,
+  });
+  assert.equal((await inspectProject(directory)).artifacts.length, 1);
+});
+
+test('directories are refused and leave no artifact or temporary files', async (t) => {
+  const directory = await temporary(t);
+  await initializeProject(directory);
   await assert.rejects(
     importArtifactFile(directory, directory),
     ValidationError,
   );
+  assert.deepEqual((await inspectProject(directory)).artifacts, []);
+  assert.deepEqual(await temporaryEntries(directory), []);
+});
+
+test('interpretation refuses an artifact too large for its format without reading it', async (t) => {
+  const directory = await temporary(t);
+  await initializeProject(directory);
+  const filename = join(directory, 'too-large.jsonl');
+  await writeFile(filename, Buffer.alloc(MAX_CONVERSATION_BYTES + 1, 0x20));
+  // Storage accepts it: there is no storage ceiling.
+  const imported = await importArtifactFile(directory, filename);
+  assert.equal(imported.byteLength, MAX_CONVERSATION_BYTES + 1);
+  await assert.rejects(
+    interpretConversation(directory, imported.id),
+    /this format accepts at most/,
+  );
+  // Refusing to interpret it does not affect what was preserved.
+  assert.deepEqual(await inspectArtifact(directory, imported.id), {
+    id: imported.id,
+    byteLength: MAX_CONVERSATION_BYTES + 1,
+  });
 });
 
 test('corruption is detected and re-import never replaces the damaged file', async (t) => {
@@ -354,6 +444,29 @@ test('corruption is detected and re-import never replaces the damaged file', asy
   );
   assert.deepEqual(await readFile(destination), damaged);
   assert.deepEqual(await temporaryEntries(directory), []);
+});
+
+test('same-length corruption is detected, because integrity is a hash, not a size', async (t) => {
+  // The size check in the read path only guards against a file changing while
+  // it is being read. Integrity itself is the content hash, so flipping one
+  // byte without changing the length must still be caught.
+  const directory = await temporary(t);
+  await initializeProject(directory);
+  const imported = await importArtifactFile(directory, fixture);
+  const destination = storedFile(directory, imported.id);
+  const flipped = await readFile(destination);
+  flipped[10] = flipped[10] === 0x41 ? 0x42 : 0x41;
+  await writeFile(destination, flipped);
+  assert.equal((await stat(destination)).size, imported.byteLength);
+  await assert.rejects(
+    inspectArtifact(directory, imported.id),
+    /hash does not match/,
+  );
+  await assert.rejects(
+    importArtifactFile(directory, fixture),
+    /refusing to overwrite/,
+  );
+  assert.deepEqual(await readFile(destination), flipped);
 });
 
 test('invalid IDs, metadata, and unexpected store entries are rejected', async (t) => {
@@ -456,8 +569,10 @@ test('a file that changes size while being read is refused rather than hashed', 
     importArtifactFile(directory, filename),
     /changed size while it was being read/,
   );
-  // Nothing was stored from the torn read.
+  // Nothing was stored from the torn read, and the partially written staging
+  // file was removed. Streaming fails mid-copy, after bytes were written.
   assert.deepEqual((await inspectProject(directory)).artifacts, []);
+  assert.deepEqual(await temporaryEntries(directory), []);
 });
 
 test('import requires initialization and does not implicitly create storage', async (t) => {

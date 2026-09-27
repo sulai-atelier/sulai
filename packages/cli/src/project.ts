@@ -1,12 +1,12 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
 import { link, lstat, mkdir, open, readdir, unlink } from 'node:fs/promises';
+import type { FileHandle } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import {
   Artifact,
   MAX_CONVERSATION_BYTES,
-  hashContent,
   importConversation,
   parseArtifactId,
   ValidationError,
@@ -26,12 +26,12 @@ const PROJECT_FILE = Buffer.from(
 );
 
 /**
- * A local-store policy, not a property of artifacts. Reads are fully buffered,
- * so this bounds memory rather than expressing a format limit. Real provider
- * exports run to hundreds of megabytes and will need streaming identity before
- * this ceiling can rise usefully.
+ * The most memory any streaming read holds, whatever the size of the artifact.
+ * Preservation and verification both stream, so there is no storage size
+ * ceiling: the real constraint is disk space, and running out of it fails and
+ * cleans up like any other write error.
  */
-export const MAX_ARTIFACT_BYTES = 64 * 1024 * 1024;
+export const STREAM_CHUNK_BYTES = 1024 * 1024;
 
 const STORE_MODE = 0o700;
 
@@ -54,7 +54,7 @@ async function assertDirectory(path: string): Promise<void> {
   }
 }
 
-async function readBounded(path: string, limit: number): Promise<Buffer> {
+async function openRegularFile(path: string): Promise<FileHandle> {
   const entry = await lstat(path);
   if (!entry.isFile() || entry.isSymbolicLink()) {
     throw new ValidationError(
@@ -66,13 +66,91 @@ async function readBounded(path: string, limit: number): Promise<Buffer> {
     constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0),
   );
   try {
+    if (!(await handle.stat()).isFile()) {
+      throw new ValidationError(
+        'Input must be a regular file, not a symbolic link',
+      );
+    }
+  } catch (error) {
+    await handle.close();
+    throw error;
+  }
+  return handle;
+}
+
+/**
+ * Refuses a file whose size changed between being opened and being read to the
+ * end. This detects growth and truncation only. Another process overwriting
+ * bytes in place at the same length is not detected, so this is not an atomic
+ * snapshot of a live file: Sulai reads files that have finished being written.
+ */
+function assertUnchangedSize(observed: number, expected: number): void {
+  if (observed !== expected) {
+    throw new ValidationError('File changed size while it was being read');
+  }
+}
+
+/**
+ * Yields bytes in bounded chunks from the current file position. The buffer is
+ * reused, so a chunk is valid only until the next one is requested; every
+ * consumer here hashes and writes it before asking for more.
+ */
+async function* readChunks(handle: FileHandle): AsyncGenerator<Uint8Array> {
+  const buffer = Buffer.alloc(STREAM_CHUNK_BYTES);
+  for (;;) {
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, null);
+    if (bytesRead === 0) return;
+    yield buffer.subarray(0, bytesRead);
+  }
+}
+
+async function writeAll(handle: FileHandle, chunk: Uint8Array): Promise<void> {
+  let offset = 0;
+  while (offset < chunk.byteLength) {
+    const { bytesWritten } = await handle.write(
+      chunk,
+      offset,
+      chunk.byteLength - offset,
+    );
+    if (bytesWritten === 0) {
+      throw new Error('Write made no progress');
+    }
+    offset += bytesWritten;
+  }
+}
+
+/**
+ * Streams a file through SHA-256 without holding it in memory, returning the
+ * identity its bytes would have as an artifact.
+ */
+async function hashFile(
+  path: string,
+): Promise<{ id: ArtifactId; byteLength: number }> {
+  const handle = await openRegularFile(path);
+  try {
+    const expected = (await handle.stat()).size;
+    const hash = createHash('sha256');
+    let byteLength = 0;
+    for await (const chunk of readChunks(handle)) {
+      hash.update(chunk);
+      byteLength += chunk.byteLength;
+    }
+    assertUnchangedSize(byteLength, expected);
+    return { id: parseArtifactId(`sha256:${hash.digest('hex')}`), byteLength };
+  } finally {
+    await handle.close();
+  }
+}
+
+async function readBounded(path: string, limit: number): Promise<Buffer> {
+  const handle = await openRegularFile(path);
+  try {
     const stat = await handle.stat();
-    if (!stat.isFile() || stat.size > limit) {
+    if (stat.size > limit) {
       throw new ValidationError(`File must contain at most ${limit} bytes`);
     }
     // Allocate for the size actually observed, plus one byte so that growth
-    // during the read is still detected. Allocating the permitted ceiling here
-    // would cost the maximum on every read regardless of how small the file is.
+    // during the read is still detected.
     const expected = stat.size;
     const buffer = Buffer.alloc(expected + 1);
     let length = 0;
@@ -86,11 +164,7 @@ async function readBounded(path: string, limit: number): Promise<Buffer> {
       if (bytesRead === 0) break;
       length += bytesRead;
     }
-    if (length !== expected) {
-      // Concurrent modification. Content addressing cannot describe a file that
-      // changed underneath the read, so refuse rather than hash a torn view.
-      throw new ValidationError('File changed size while it was being read');
-    }
+    assertUnchangedSize(length, expected);
     return buffer.subarray(0, length);
   } finally {
     await handle.close();
@@ -129,19 +203,49 @@ async function removeTemporaryFile(path: string): Promise<void> {
   }
 }
 
+/**
+ * Removes a temporary file after a failure and returns the error to throw. If
+ * cleanup also fails, both causes are kept rather than the first being lost.
+ */
+async function cleanupAfterFailure(
+  error: unknown,
+  temporaryPath: string,
+): Promise<unknown> {
+  try {
+    await removeTemporaryFile(temporaryPath);
+  } catch (cleanupError) {
+    const message = error instanceof Error ? error.message : 'Write failed';
+    return new AggregateError(
+      [error, cleanupError],
+      `${message}; temporary-file cleanup also failed`,
+      { cause: error },
+    );
+  }
+  return error;
+}
+
+async function prepareTemporaryDirectory(path: string): Promise<void> {
+  // The temporary directory is ephemeral, so recreate it rather than requiring
+  // that a previous run left it behind.
+  await mkdir(path, { recursive: true, mode: STORE_MODE });
+  await assertDirectory(path);
+}
+
+/**
+ * Publishes a small, fixed byte sequence under a fixed name, refusing to replace
+ * different existing content. Used for the project marker, whose name is not a
+ * content hash.
+ */
 async function writeImmutable(
   temporaryDirectory: string,
   destination: string,
   bytes: Uint8Array,
 ): Promise<boolean> {
-  // The temporary directory is ephemeral, so recreate it rather than requiring
-  // that a previous run left it behind.
-  await mkdir(temporaryDirectory, { recursive: true, mode: STORE_MODE });
-  await assertDirectory(temporaryDirectory);
+  await prepareTemporaryDirectory(temporaryDirectory);
   const temporaryPath = join(temporaryDirectory, randomUUID());
-  const handle = await open(temporaryPath, 'wx', 0o600);
   let created = true;
   try {
+    const handle = await open(temporaryPath, 'wx', 0o600);
     try {
       await handle.writeFile(bytes);
       await handle.sync();
@@ -162,24 +266,82 @@ async function writeImmutable(
       created = false;
     }
   } catch (error) {
-    let cleanupFailure: { error: unknown } | undefined;
-    try {
-      await removeTemporaryFile(temporaryPath);
-    } catch (cleanupError) {
-      cleanupFailure = { error: cleanupError };
-    }
-    if (cleanupFailure) {
-      const message = error instanceof Error ? error.message : 'Write failed';
-      throw new AggregateError(
-        [error, cleanupFailure.error],
-        `${message}; temporary-file cleanup also failed`,
-        { cause: error },
-      );
-    }
-    throw error;
+    throw await cleanupAfterFailure(error, temporaryPath);
   }
   await removeTemporaryFile(temporaryPath);
   return created;
+}
+
+interface StagedArtifact {
+  readonly temporaryPath: string;
+  readonly id: ArtifactId;
+  readonly byteLength: number;
+}
+
+/**
+ * Streams a source file into a new temporary file, hashing as it goes, so the
+ * identity is known once the last byte is written and no more than one chunk is
+ * ever in memory. The temporary file is synced before this returns.
+ */
+async function stageIntoTemporary(
+  temporaryDirectory: string,
+  sourcePath: string,
+): Promise<StagedArtifact> {
+  await prepareTemporaryDirectory(temporaryDirectory);
+  const source = await openRegularFile(sourcePath);
+  const temporaryPath = join(temporaryDirectory, randomUUID());
+  try {
+    const expected = (await source.stat()).size;
+    const hash = createHash('sha256');
+    let byteLength = 0;
+    const target = await open(temporaryPath, 'wx', 0o600);
+    try {
+      for await (const chunk of readChunks(source)) {
+        hash.update(chunk);
+        await writeAll(target, chunk);
+        byteLength += chunk.byteLength;
+      }
+      await target.sync();
+    } finally {
+      await target.close();
+    }
+    assertUnchangedSize(byteLength, expected);
+    return {
+      temporaryPath,
+      id: parseArtifactId(`sha256:${hash.digest('hex')}`),
+      byteLength,
+    };
+  } catch (error) {
+    throw await cleanupAfterFailure(error, temporaryPath);
+  } finally {
+    await source.close();
+  }
+}
+
+/**
+ * Publishes a staged artifact under its content address without replacing
+ * anything. If that address is already taken, the stored file is re-hashed by
+ * streaming rather than trusted by its name, so a corrupt file under the right
+ * name is refused instead of being reported as a successful duplicate.
+ */
+async function publishArtifact(
+  staged: StagedArtifact,
+  destination: string,
+): Promise<boolean> {
+  try {
+    // A hard link publishes complete bytes atomically without replacing an existing name.
+    await link(staged.temporaryPath, destination);
+    return true;
+  } catch (error) {
+    if (!hasCode(error, 'EEXIST')) throw error;
+  }
+  const existing = await hashFile(destination);
+  if (existing.id !== staged.id) {
+    throw new ValidationError(
+      'Existing stored bytes differ; refusing to overwrite',
+    );
+  }
+  return false;
 }
 
 function describeUnsupportedMarker(bytes: Buffer): string {
@@ -245,46 +407,43 @@ function artifactPath(artifactsDirectory: string, id: ArtifactId): string {
 }
 
 /**
- * Stores exact bytes. This performs no format interpretation at all: material
- * that no current adapter understands is still preserved faithfully, so a
- * later, better adapter can re-derive from the untouched original instead of
- * requiring the user to import again.
+ * Stores exact bytes by streaming. This performs no format interpretation at
+ * all: material that no current reader understands is still preserved
+ * faithfully, so a later, better reader can re-derive from the untouched
+ * original instead of requiring the user to import again.
  */
 export async function importArtifactFile(directory: string, filename: string) {
   const project = await loadProject(directory);
-  const bytes = await readBounded(resolve(filename), MAX_ARTIFACT_BYTES);
-  // Hash the bytes already in hand rather than constructing an Artifact, which
-  // would copy once on construction and again on `bytes()`. Import needs the
-  // identity, not an instance.
-  const id = hashContent(bytes);
-  const created = await writeImmutable(
-    project.temporary,
-    artifactPath(project.artifacts, id),
-    bytes,
-  );
-  return { id, byteLength: bytes.byteLength, created };
+  const staged = await stageIntoTemporary(project.temporary, resolve(filename));
+  let created: boolean;
+  try {
+    created = await publishArtifact(
+      staged,
+      artifactPath(project.artifacts, staged.id),
+    );
+  } catch (error) {
+    throw await cleanupAfterFailure(error, staged.temporaryPath);
+  }
+  await removeTemporaryFile(staged.temporaryPath);
+  return { id: staged.id, byteLength: staged.byteLength, created };
 }
 
 /**
- * Reads stored bytes and verifies that they still hash to the name they are
- * stored under. No format is assumed.
+ * Streams a stored artifact through SHA-256 and checks it against the name it
+ * is stored under. Memory use is bounded by the chunk size, not the artifact.
  */
-async function readArtifact(
+async function verifyStoredArtifact(
   artifactsDirectory: string,
   value: unknown,
-): Promise<Artifact> {
+) {
   const id = parseArtifactId(value);
-  const bytes = await readBounded(
-    artifactPath(artifactsDirectory, id),
-    MAX_ARTIFACT_BYTES,
-  );
-  const artifact = new Artifact(bytes);
-  if (artifact.id !== id) {
+  const actual = await hashFile(artifactPath(artifactsDirectory, id));
+  if (actual.id !== id) {
     throw new ValidationError(
       'Stored artifact hash does not match its identity',
     );
   }
-  return artifact;
+  return { id, byteLength: actual.byteLength };
 }
 
 function storedArtifactId(filename: string): ArtifactId {
@@ -296,26 +455,24 @@ function storedArtifactId(filename: string): ArtifactId {
 
 /**
  * Generic integrity check. Verifies every stored artifact against its own
- * identity without interpreting any of them as a conversation.
+ * identity without interpreting any of them, and without loading any of them
+ * into memory.
  */
 export async function inspectProject(directory: string) {
   const project = await loadProject(directory);
   const filenames = (await readdir(project.artifacts)).sort();
   const artifacts = [];
   for (const filename of filenames) {
-    const artifact = await readArtifact(
-      project.artifacts,
-      storedArtifactId(filename),
+    artifacts.push(
+      await verifyStoredArtifact(project.artifacts, storedArtifactId(filename)),
     );
-    artifacts.push({ id: artifact.id, byteLength: artifact.byteLength });
   }
   return { format: PROJECT_FORMAT, version: PROJECT_VERSION, artifacts };
 }
 
 export async function inspectArtifact(directory: string, value: unknown) {
   const project = await loadProject(directory);
-  const artifact = await readArtifact(project.artifacts, value);
-  return { id: artifact.id, byteLength: artifact.byteLength };
+  return verifyStoredArtifact(project.artifacts, value);
 }
 
 function decodeUnit(
@@ -334,13 +491,23 @@ function decodeUnit(
  */
 export async function interpretConversation(directory: string, value: unknown) {
   const project = await loadProject(directory);
-  const artifact = await readArtifact(project.artifacts, value);
-  // Reject on size before copying the bytes out. The storage ceiling is far
-  // above what this format permits, so an artifact can be stored legitimately
-  // and still be too large for this interpreter.
-  if (artifact.byteLength > MAX_CONVERSATION_BYTES) {
+  const id = parseArtifactId(value);
+  const path = artifactPath(project.artifacts, id);
+  // Refuse on size from metadata alone. Storage has no ceiling, so a stored
+  // artifact can be far larger than this format accepts, and it must be
+  // refused without being read into memory.
+  const { size } = await lstat(path);
+  if (size > MAX_CONVERSATION_BYTES) {
     throw new ValidationError(
-      `Artifact is ${artifact.byteLength} bytes; this format accepts at most ${MAX_CONVERSATION_BYTES}`,
+      `Artifact is ${size} bytes; this format accepts at most ${MAX_CONVERSATION_BYTES}`,
+    );
+  }
+  const artifact = new Artifact(
+    await readBounded(path, MAX_CONVERSATION_BYTES),
+  );
+  if (artifact.id !== id) {
+    throw new ValidationError(
+      'Stored artifact hash does not match its identity',
     );
   }
   const conversation: ImportedConversation = importConversation(

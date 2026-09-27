@@ -84,8 +84,9 @@ input is validated before any message is returned.
 
 These are limits on **interpretation**, not on storage. An artifact larger than
 1 MiB can be stored successfully and then be refused by this interpreter, because
-the storage ceiling is a separate, much larger local-store policy. Validation no
-longer precedes artifact publication: publication does not validate at all.
+storage has no size ceiling. The interpreter refuses an oversized artifact from its
+filesystem size before reading any of it. Validation no longer precedes artifact
+publication: publication does not validate at all.
 
 ## Local storage
 
@@ -116,10 +117,13 @@ CLI. See [ADR 0003](adr/0003-storage-is-independent-of-artifact-format.md).
 make a project invalid. Storage directories are created with mode `0700`, which
 POSIX systems enforce and Windows ignores.
 
-Imports write and sync a temporary file, close it, and publish a hard link under
-the artifact digest. Linking fails if that name exists, so concurrent identical
-imports converge on one complete file. Existing bytes are compared exactly before
-reporting an import as already present. Temporary names are random but are never
+Imports stream the source in 1 MiB chunks, feeding each chunk to SHA-256 and to a
+temporary file in the same pass, then sync the temporary file, close it, and
+publish a hard link under the artifact digest. Linking fails if that name exists,
+so concurrent identical imports converge on one complete file. When the name is
+already taken, the stored file is re-hashed by streaming and must match the new
+identity before an import is reported as already present; a corrupt file under the
+right name is refused rather than counted as a duplicate. Temporary names are random but are never
 part of an artifact or source identity. Cleanup treats `EBUSY`, `EPERM` and
 `EACCES` as transient and retries up to three times, because Windows reports a
 locked file differently depending on which component holds it; `ENOENT` means the
@@ -140,16 +144,21 @@ stored under. It parses nothing.
 `interpret` reads one artifact through one specific format. It may fail on bytes
 that were stored successfully, and that failure leaves the artifact untouched.
 
-The storage read ceiling is a local-store policy distinct from any format limit.
-Reads are fully buffered, so it bounds memory rather than expressing a real
-capability; provider exports beyond it need streaming identity first.
+Storage has **no size ceiling**. Import and inspection both stream, holding at most
+one 1 MiB chunk of an artifact in memory whatever its size, so the constraint is
+disk space rather than memory. A format limit such as the conversation format's
+1 MiB constrains a reader, never storage. See
+[ADR 0004](adr/0004-streaming-preservation-without-a-storage-ceiling.md).
 
 There is no mutable artifact index: inspection enumerates sorted artifact names
 and checks their hashes. It parses nothing and reconstructs no parser view, so a
 store holding material that no reader understands still verifies cleanly. An
-unexpected store entry or a corrupt artifact causes inspection to fail. Reads size
-their buffer from the file's observed size and refuse a file that changes size
-mid-read, since content addressing cannot describe a torn view. To move a project,
+unexpected store entry or a corrupt artifact causes inspection to fail. Integrity
+is the SHA-256 identity, so corruption that leaves the length unchanged is still
+detected. Separately, a file whose size changes between being opened and being read
+to the end is refused. That guard detects growth and truncation only; it does not
+detect another process overwriting bytes in place at the same length, so it is not
+an atomic snapshot of a live file. To move a project,
 copy the entire `.sulai` directory while imports are stopped; `.sulai/tmp` is
 ephemeral and need not be copied. Stored records contain no absolute paths.
 
