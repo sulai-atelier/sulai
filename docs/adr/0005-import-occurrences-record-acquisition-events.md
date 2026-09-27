@@ -1,6 +1,7 @@
 # ADR 0005: Import occurrences record acquisition events
 
-Status: Accepted.
+Status: Accepted. The CLI now fills several roots per acquisition; see
+[ADR 0006](0006-several-roots-in-one-acquisition.md).
 
 ## Context
 

@@ -28,11 +28,12 @@ is available disk space. Storing material is not an assertion that it is
 meaningful or safe. Raw content is never executed, and no stored bytes are parsed
 unless a command explicitly interprets them.
 
-**Acquisition reads only the path you name.** Importing a directory walks it
+**Acquisition reads only the paths you name.** Importing a directory walks it
 recursively, but never follows symbolic links or junctions and never reads content
-looking for references. A file mentioned by the material you import is not
-acquired unless it lies under the path you named, so importing a session that once
-read a credential file does not copy that file. Links, unreadable and special files
+looking for references. There is no discovery of related locations. A file
+mentioned by the material you import is not acquired unless it lies under a path
+you named, so importing a session that once read a credential file does not copy
+that file. Links, unreadable and special files
 are recorded as skipped, with a reason, and are not captured.
 
 **Occurrence records contain the absolute path of each acquisition root,** which

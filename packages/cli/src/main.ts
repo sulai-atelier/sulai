@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { readClaudeCodeSessionArtifact } from './experimental.js';
 import {
-  importPath,
+  importPaths,
   initializeProject,
   inspectArtifact,
   inspectOccurrence,
@@ -11,8 +11,9 @@ import {
 
 const usage = `Usage:
   sulai init <directory>
-  sulai import <directory> <path>              preserve a file or a directory and
-                                               record the acquisition
+  sulai import <directory> <path>...           preserve files or directories and
+                                               record the acquisition as one
+                                               occurrence, one root per path
   sulai inspect <directory> [id]               verify stored identity and integrity
                                                of the project, an artifact, or an
                                                occurrence
@@ -25,7 +26,7 @@ Experimental, unstable, may be removed:
 
 Import preserves any bytes and records one occurrence: what it attempted, the
 exact bytes each input became, and what it could not capture and why. It reads
-only the path given; it never follows links. A partial acquisition still prints
+only the paths given, which must not overlap; it never follows links. A partial acquisition still prints
 its record and exits with status 3. Interpretation is a separate step, so
 material that no current reader understands is still stored faithfully and can
 be re-derived later. The only stable interpreter today is the synthetic
@@ -60,10 +61,9 @@ async function main(args: string[]): Promise<void> {
   } else if (
     command === 'import' &&
     directory !== undefined &&
-    operand !== undefined &&
-    args.length === 3
+    args.length >= 3
   ) {
-    const imported = await importPath(directory, operand);
+    const imported = await importPaths(directory, args.slice(2));
     skipped = imported.skipped.length;
     result = imported;
   } else if (

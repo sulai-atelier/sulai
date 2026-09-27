@@ -1,8 +1,16 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
-import { link, lstat, mkdir, open, readdir, unlink } from 'node:fs/promises';
+import {
+  link,
+  lstat,
+  mkdir,
+  open,
+  readdir,
+  realpath,
+  unlink,
+} from 'node:fs/promises';
 import type { FileHandle } from 'node:fs/promises';
-import { isAbsolute, join, relative, resolve } from 'node:path';
+import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import {
   Artifact,
@@ -553,65 +561,142 @@ function byUtf8Path(a: { path: string }, b: { path: string }): number {
   );
 }
 
+/** Whether `child` is `parent` itself or lies inside it. */
+function isWithin(parent: string, child: string): boolean {
+  const path = relative(parent, child);
+  return (
+    path === '' ||
+    (path !== '..' && !path.startsWith(`..${sep}`) && !isAbsolute(path))
+  );
+}
+
+interface CheckedRoot {
+  readonly id: string;
+  readonly kind: 'file' | 'directory';
+  readonly locator: string;
+  readonly real: string;
+  readonly dev: bigint;
+  readonly ino: bigint;
+}
+
+const sameDirectory = (
+  a: { dev: bigint; ino: bigint },
+  b: { dev: bigint; ino: bigint },
+) => a.ino !== 0n && a.dev === b.dev && a.ino === b.ino;
+
 /**
- * Preserves a file, or every file under a directory, and records the attempt
- * as one import occurrence.
+ * Checks every root before anything is captured, so a root that is missing, a
+ * link, not a file or directory, inside the project store, or overlapping
+ * another root refuses the whole acquisition and nothing is recorded. The v1
+ * record has no way to state that a named root was absent, and an acquisition
+ * that silently dropped one would misstate what was chosen.
+ */
+async function checkRoots(
+  inputs: readonly string[],
+  storePath: string,
+): Promise<CheckedRoot[]> {
+  if (inputs.length === 0) {
+    throw new ValidationError('Name at least one path to import');
+  }
+  const roots: CheckedRoot[] = [];
+  for (const [index, input] of inputs.entries()) {
+    const locator = resolve(input);
+    if (isWithin(storePath, locator)) {
+      throw new ValidationError('Cannot acquire from inside the project store');
+    }
+    const stat = await lstat(locator, { bigint: true });
+    if (stat.isSymbolicLink()) {
+      throw new ValidationError('The input must not be a symbolic link');
+    }
+    if (!stat.isFile() && !stat.isDirectory()) {
+      throw new ValidationError(
+        'The input must be a regular file or a directory',
+      );
+    }
+    roots.push({
+      id: `r${index + 1}`,
+      kind: stat.isFile() ? 'file' : 'directory',
+      locator,
+      // Compared by real path, so a root reached through a linked ancestor
+      // is still recognized as the same place.
+      real: await realpath(locator),
+      dev: stat.dev,
+      ino: stat.ino,
+    });
+  }
+  for (const a of roots) {
+    for (const b of roots) {
+      if (a === b) continue;
+      const overlaps =
+        (a.kind === 'directory' && isWithin(a.real, b.real)) ||
+        (a.kind === 'directory' &&
+          b.kind === 'directory' &&
+          sameDirectory(a, b)) ||
+        (a.kind === 'file' && b.kind === 'file' && a.real === b.real);
+      if (overlaps) {
+        throw new ValidationError(
+          `Roots ${a.id} and ${b.id} overlap; every input must belong to exactly one root`,
+        );
+      }
+    }
+  }
+  return roots;
+}
+
+/**
+ * Preserves files, or every file under directories, from one or more roots and
+ * records the attempt as one import occurrence. Roots are numbered `r1`, `r2`
+ * and so on in the order given.
  *
- * Only the named root is read. Symbolic links and junctions are never followed,
- * and no content is read for references to anything else, so an acquisition
- * never reaches outside what the caller chose. The project's own store is
- * excluded when it lies inside the root. An input that cannot be captured is
- * recorded as skipped with a reason and the rest continues; a failure of the
- * store stops the acquisition. Every artifact is published before the
- * occurrence, so an occurrence never names bytes the store does not hold.
+ * Only the named roots are read. Symbolic links and junctions are never
+ * followed, and no content is read for references to anything else, so an
+ * acquisition never reaches outside what the caller chose. The project's own
+ * store is excluded in whichever root contains it. An input that cannot be
+ * captured is recorded as skipped with a reason and the rest continues; a
+ * failure of the store, or a root that cannot be listed at all, stops the
+ * acquisition. Every artifact is published before the occurrence, so an
+ * occurrence never names bytes the store does not hold.
  *
  * The walk is not atomic. Inputs that appear during it may be missed, and a
  * complete occurrence means that everything the walk found was captured, not
  * that the result is a snapshot of one instant.
  */
-export async function importPath(directory: string, input: string) {
+export async function importPaths(
+  directory: string,
+  inputs: readonly string[],
+) {
   const project = await loadProject(directory);
-  const locator = resolve(input);
-  const insideStore = relative(project.store, locator);
-  if (
-    insideStore === '' ||
-    (!insideStore.startsWith('..') && !isAbsolute(insideStore))
-  ) {
-    throw new ValidationError('Cannot acquire from inside the project store');
-  }
-  const rootStat = await lstat(locator);
-  if (rootStat.isSymbolicLink()) {
-    throw new ValidationError('The input must not be a symbolic link');
-  }
-  if (!rootStat.isFile() && !rootStat.isDirectory()) {
-    throw new ValidationError(
-      'The input must be a regular file or a directory',
-    );
-  }
-  const kind = rootStat.isFile() ? 'file' : 'directory';
+  const roots = await checkRoots(inputs, project.store);
   const store = await lstat(project.store, { bigint: true });
   const isStore = (stat: { dev: bigint; ino: bigint }, path: string) =>
-    (stat.ino !== 0n && stat.dev === store.dev && stat.ino === store.ino) ||
-    relative(project.store, path) === '';
+    sameDirectory(stat, store) || relative(project.store, path) === '';
+  const otherRoot = (stat: { dev: bigint; ino: bigint }, root: string) =>
+    roots.find(
+      (other) =>
+        other.id !== root &&
+        other.kind === 'directory' &&
+        sameDirectory(stat, other),
+    );
 
-  const root = 'r1';
   const startedAt = new Date().toISOString();
   const nonce = randomBytes(16).toString('hex');
   const entries: OccurrenceEntry[] = [];
   const skipped: OccurrenceSkip[] = [];
   const excluded: OccurrenceExclusion[] = [];
   const isNew = new Map<ArtifactId, boolean>();
-  const skip = (path: string, reason: SkipReason) =>
-    skipped.push({ root, path, reason });
 
-  async function capture(absolute: string, path: string): Promise<void> {
+  async function capture(
+    root: string,
+    absolute: string,
+    path: string,
+  ): Promise<void> {
     let source: FileHandle;
     try {
       source = await openRegularFile(absolute);
     } catch (error) {
       const reason = openFailure(error);
       if (reason === null) throw error;
-      skip(path, reason);
+      skipped.push({ root, path, reason });
       return;
     }
     let staged: StagedArtifact;
@@ -619,7 +704,7 @@ export async function importPath(directory: string, input: string) {
       staged = await stageFromHandle(project.temporary, source);
     } catch (error) {
       if (!(error instanceof InputUnavailable)) throw error;
-      skip(path, error.reason);
+      skipped.push({ root, path, reason: error.reason });
       return;
     } finally {
       await source.close();
@@ -635,7 +720,8 @@ export async function importPath(directory: string, input: string) {
     }
     await removeTemporaryFile(staged.temporaryPath);
     // The first capture of these bytes in this acquisition decides whether the
-    // acquisition added them; a later duplicate did not find them already there.
+    // acquisition added them; a later duplicate, under any root, did not find
+    // them already there.
     const added = isNew.get(staged.id) ?? created;
     isNew.set(staged.id, added);
     entries.push({
@@ -648,14 +734,18 @@ export async function importPath(directory: string, input: string) {
     });
   }
 
-  async function walk(absolute: string, path: string): Promise<void> {
+  async function walk(
+    root: string,
+    absolute: string,
+    path: string,
+  ): Promise<void> {
     let names: Buffer[];
     try {
       names = await readdir(absolute, { encoding: 'buffer' });
     } catch (error) {
       const reason = listFailure(error);
       if (reason === null || path === '') throw error;
-      skip(path, reason);
+      skipped.push({ root, path, reason });
       return;
     }
     names.sort(Buffer.compare);
@@ -665,7 +755,11 @@ export async function importPath(directory: string, input: string) {
         name = utf8.decode(raw);
       } catch {
         const lossy = raw.toString('utf8');
-        skip(path === '' ? lossy : `${path}/${lossy}`, 'non-utf8-name');
+        skipped.push({
+          root,
+          path: path === '' ? lossy : `${path}/${lossy}`,
+          reason: 'non-utf8-name',
+        });
         continue;
       }
       const child = join(absolute, name);
@@ -676,31 +770,45 @@ export async function importPath(directory: string, input: string) {
       } catch (error) {
         const reason = listFailure(error);
         if (reason === null) throw error;
-        skip(childPath, reason);
+        skipped.push({ root, path: childPath, reason });
         continue;
       }
       if (stat.isSymbolicLink()) {
-        skip(childPath, 'symbolic-link');
+        skipped.push({ root, path: childPath, reason: 'symbolic-link' });
       } else if (stat.isDirectory()) {
         if (isStore(stat, child)) {
           excluded.push({ root, path: childPath, reason: 'project-store' });
-        } else {
-          await walk(child, childPath);
+          continue;
         }
+        const overlapping = otherRoot(stat, root);
+        if (overlapping !== undefined) {
+          // Paths said the roots were apart; the filesystem says otherwise.
+          throw new ValidationError(
+            `Roots ${root} and ${overlapping.id} overlap; every input must belong to exactly one root`,
+          );
+        }
+        await walk(root, child, childPath);
       } else if (stat.isFile()) {
-        await capture(child, childPath);
+        await capture(root, child, childPath);
       } else {
-        skip(childPath, 'not-regular-file');
+        skipped.push({ root, path: childPath, reason: 'not-regular-file' });
       }
     }
   }
 
-  if (kind === 'file') await capture(locator, '');
-  else await walk(locator, '');
+  for (const root of roots) {
+    if (root.kind === 'file') await capture(root.id, root.locator, '');
+    else await walk(root.id, root.locator, '');
+  }
 
-  entries.sort(byUtf8Path);
-  skipped.sort(byUtf8Path);
-  excluded.sort(byUtf8Path);
+  const order = new Map(roots.map((root, index) => [root.id, index]));
+  const byRootThenPath = (
+    a: { root: string; path: string },
+    b: { root: string; path: string },
+  ) => (order.get(a.root) ?? 0) - (order.get(b.root) ?? 0) || byUtf8Path(a, b);
+  entries.sort(byRootThenPath);
+  skipped.sort(byRootThenPath);
+  excluded.sort(byRootThenPath);
   const { id, bytes, occurrence } = encodeOccurrence({
     format: 'sulai.occurrence',
     version: 1,
@@ -708,7 +816,12 @@ export async function importPath(directory: string, input: string) {
     startedAt,
     finishedAt: new Date().toISOString(),
     status: skipped.length === 0 ? 'complete' : 'partial',
-    roots: [{ id: root, kind, platform: process.platform, locator }],
+    roots: roots.map((root) => ({
+      id: root.id,
+      kind: root.kind,
+      platform: process.platform,
+      locator: root.locator,
+    })),
     entries,
     skipped,
     excluded,
@@ -724,13 +837,30 @@ export async function importPath(directory: string, input: string) {
   return {
     occurrenceId: id,
     status: occurrence.status,
-    root: { kind, locator },
+    roots: roots.map(({ id: root, kind, locator }) => ({
+      id: root,
+      kind,
+      locator,
+    })),
     entryCount: occurrence.entries.length,
     newArtifacts: distinct.filter(Boolean).length,
     existingArtifacts: distinct.filter((added) => !added).length,
-    skipped: occurrence.skipped.map(({ path, reason }) => ({ path, reason })),
-    excluded: occurrence.excluded.map(({ path, reason }) => ({ path, reason })),
+    skipped: occurrence.skipped.map(({ root, path, reason }) => ({
+      root,
+      path,
+      reason,
+    })),
+    excluded: occurrence.excluded.map(({ root, path, reason }) => ({
+      root,
+      path,
+      reason,
+    })),
   };
+}
+
+/** One root; see `importPaths`. */
+export function importPath(directory: string, input: string) {
+  return importPaths(directory, [input]);
 }
 
 /**

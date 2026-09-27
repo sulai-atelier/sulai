@@ -184,9 +184,18 @@ An occurrence is an immutable record of one acquisition event. It is separate fr
 artifact identity: the same bytes can arrive in many events, and each event is
 recorded. See [ADR 0005](adr/0005-import-occurrences-record-acquisition-events.md).
 
-`sulai import <project> <path>` takes a file or a directory. A directory is walked
-recursively and each regular file under it is preserved. A file is a one-entry
-occurrence whose single entry has the empty path, meaning the root itself.
+`sulai import <project> <path>...` takes one or more files or directories. Each
+path is one root of a single occurrence, numbered `r1`, `r2` and so on in the order
+given. A directory is walked recursively and each regular file under it is
+preserved. A file root has a single entry with the empty path, meaning the root
+itself.
+
+Every root is checked before anything is captured. If a root is missing, is a link,
+is neither a file nor a directory, lies inside the project store, or overlaps
+another root, the whole acquisition is refused and nothing is recorded. Overlap is
+judged by real path, and directory roots also by filesystem identity. Identical
+bytes under different roots are one artifact with separate entries. See
+[ADR 0006](adr/0006-several-roots-in-one-acquisition.md).
 
 The record is one line of compact JSON followed by one LF, with the fields in this
 order and no others:
@@ -245,13 +254,15 @@ reads of one record are limited to 64 MiB.
 
 Acquisition order: each input is streamed and published as an artifact first, and
 the occurrence is published last, by the same never-replace hard-link protocol. A
-failure of the store stops the acquisition before any record is written, leaving
-at most unreferenced artifacts. An input that cannot be captured is skipped and
-the walk continues. The walk is not atomic. Inputs that appear during it may be
+failure of the store, or a root that cannot be listed at all once the walk has
+begun, stops the acquisition before any record is written, leaving at most
+unreferenced artifacts. An input that cannot be captured is skipped and the walk
+continues. The walk is not atomic. Inputs that appear during it may be
 missed, and `complete` means everything the walk found was captured. It never means
 a snapshot of one instant.
 
-The CLI prints `occurrenceId`, `status`, `root`, `entryCount`, `newArtifacts`,
-`existingArtifacts`, `skipped` and `excluded`. A partial acquisition exits with
+The CLI prints `occurrenceId`, `status`, `roots`, `entryCount`, `newArtifacts`,
+`existingArtifacts`, `skipped` and `excluded`; each skipped or excluded item names
+its root. A partial acquisition exits with
 status 3 and still prints its record. `sulai inspect <project> <occurrence-id>`
 prints the full record after verifying it and every artifact it names.

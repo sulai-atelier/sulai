@@ -55,8 +55,8 @@ npm run cli -- inspect .tmp/example
 
 The import prints an occurrence: the record of that acquisition, with how many
 inputs it captured, how many of their byte sequences were new to the store, and
-anything it could not capture. `import` also takes a directory, which it walks
-without following links. `inspect` verifies every stored artifact and occurrence
+anything it could not capture. `import` also takes directories, and several paths
+at once as one acquisition; it walks them without following links. `inspect` verifies every stored artifact and occurrence
 without parsing any artifact, and lists the artifact IDs. To read the artifact
 through the conversation format, and see its decoded messages, source units and
 exact raw records, substitute its ID for `ARTIFACT_ID`:

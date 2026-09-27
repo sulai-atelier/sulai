@@ -21,6 +21,7 @@ import type { TestContext } from 'node:test';
 import { encodeOccurrence, parseOccurrence } from '@sulai/core';
 import {
   importPath,
+  importPaths,
   initializeProject,
   inspectOccurrence,
   inspectProject,
@@ -101,7 +102,9 @@ test('a directory acquisition answers which inputs, which bytes, which were new,
   assert.equal(result.existingArtifacts, 0);
   assert.deepEqual(result.skipped, []);
   assert.deepEqual(result.excluded, []);
-  assert.deepEqual(result.root, { kind: 'directory', locator: resolve(root) });
+  assert.deepEqual(result.roots, [
+    { id: 'r1', kind: 'directory', locator: resolve(root) },
+  ]);
 
   const record = await inspectOccurrence(directory, result.occurrenceId);
   // Every input once, relative and `/`-separated, ordered by UTF-8 bytes (so
@@ -195,7 +198,9 @@ test('a single file is a one-entry occurrence at the root itself', async (t) => 
   await writeFile(file, 'single');
   const result = await importPath(directory, file);
   assert.equal(result.entryCount, 1);
-  assert.deepEqual(result.root, { kind: 'file', locator: resolve(file) });
+  assert.deepEqual(result.roots, [
+    { id: 'r1', kind: 'file', locator: resolve(file) },
+  ]);
   const record = await inspectOccurrence(directory, result.occurrenceId);
   assert.deepEqual(
     record.entries.map(({ path, artifact, new: added }) => ({
@@ -240,8 +245,10 @@ test('links are recorded and never followed, so nothing outside the chosen root 
   const result = await importPath(directory, root);
   assert.equal(result.status, 'partial');
   assert.deepEqual(result.skipped, [
-    { path: 'linked-directory', reason: 'symbolic-link' },
-    ...(fileLink ? [{ path: 'linked-file', reason: 'symbolic-link' }] : []),
+    { root: 'r1', path: 'linked-directory', reason: 'symbolic-link' },
+    ...(fileLink
+      ? [{ root: 'r1', path: 'linked-file', reason: 'symbolic-link' }]
+      : []),
   ]);
   const inspection = await inspectProject(directory);
   assert.deepEqual(
@@ -281,7 +288,7 @@ test('an input that changes while it is read is skipped, and the rest is preserv
   const result = await importPath(directory, root);
   assert.equal(result.status, 'partial');
   assert.deepEqual(result.skipped, [
-    { path: 'growing.jsonl', reason: 'changed-during-read' },
+    { root: 'r1', path: 'growing.jsonl', reason: 'changed-during-read' },
   ]);
   assert.equal(result.entryCount, 1);
   assert.deepEqual(
@@ -298,7 +305,7 @@ test('the project store inside the root is excluded, and the store itself cannot
   const result = await importPath(base, base);
   assert.equal(result.status, 'complete');
   assert.deepEqual(result.excluded, [
-    { path: '.sulai', reason: 'project-store' },
+    { root: 'r1', path: '.sulai', reason: 'project-store' },
   ]);
   assert.equal(result.entryCount, 2);
   await assert.rejects(
@@ -457,7 +464,7 @@ test(
     await tree(root, { 'good.txt': 'good' });
     const result = await importPath(directory, root);
     assert.deepEqual(result.skipped, [
-      { path: 'bad-�', reason: 'non-utf8-name' },
+      { root: 'r1', path: 'bad-�', reason: 'non-utf8-name' },
     ]);
     assert.equal(result.entryCount, 1);
   },
@@ -477,10 +484,10 @@ test(
     });
     const fifo = spawnSync('mkfifo', [join(root, 'pipe')]);
     const expected = [
-      { path: 'closed', reason: 'unreadable' },
-      { path: 'locked.txt', reason: 'unreadable' },
+      { root: 'r1', path: 'closed', reason: 'unreadable' },
+      { root: 'r1', path: 'locked.txt', reason: 'unreadable' },
       ...(fifo.status === 0
-        ? [{ path: 'pipe', reason: 'not-regular-file' }]
+        ? [{ root: 'r1', path: 'pipe', reason: 'not-regular-file' }]
         : []),
     ];
     await chmod(join(root, 'locked.txt'), 0o000);
@@ -533,7 +540,7 @@ test('the CLI reports a partial acquisition with its record and a distinct exit 
   };
   assert.equal(printed.status, 'partial');
   assert.deepEqual(printed.skipped, [
-    { path: 'link', reason: 'symbolic-link' },
+    { root: 'r1', path: 'link', reason: 'symbolic-link' },
   ]);
   const shown = run(['inspect', directory, printed.occurrenceId]);
   assert.equal(shown.status, 0, shown.stderr);
@@ -541,4 +548,154 @@ test('the CLI reports a partial acquisition with its record and a distinct exit 
     (JSON.parse(shown.stdout) as { id: string }).id,
     printed.occurrenceId,
   );
+});
+
+test('one acquisition across several roots is one occurrence, numbered in argument order', async (t) => {
+  const { base, directory } = await project(t);
+  const first = join(base, 'first');
+  const second = join(base, 'second');
+  const single = join(base, 'single.txt');
+  await tree(first, { 'b.txt': 'shared', 'only-first.txt': 'first' });
+  await tree(second, { 'a.txt': 'shared', 'only-second.txt': 'second' });
+  await writeFile(single, 'single');
+  const result = await importPaths(directory, [first, second, single]);
+  assert.equal(result.status, 'complete');
+  assert.deepEqual(result.roots, [
+    { id: 'r1', kind: 'directory', locator: resolve(first) },
+    { id: 'r2', kind: 'directory', locator: resolve(second) },
+    { id: 'r3', kind: 'file', locator: resolve(single) },
+  ]);
+  // Identical bytes under two roots are one artifact and two entries.
+  assert.equal(result.entryCount, 5);
+  assert.equal(result.newArtifacts, 4);
+  const record = await inspectOccurrence(directory, result.occurrenceId);
+  assert.deepEqual(
+    record.entries.map(({ root, path, artifact, new: added }) => ({
+      root,
+      path,
+      artifact,
+      added,
+    })),
+    [
+      { root: 'r1', path: 'b.txt', artifact: sha('shared'), added: true },
+      {
+        root: 'r1',
+        path: 'only-first.txt',
+        artifact: sha('first'),
+        added: true,
+      },
+      { root: 'r2', path: 'a.txt', artifact: sha('shared'), added: true },
+      {
+        root: 'r2',
+        path: 'only-second.txt',
+        artifact: sha('second'),
+        added: true,
+      },
+      { root: 'r3', path: '', artifact: sha('single'), added: true },
+    ],
+  );
+  assert.equal((await inspectProject(directory)).occurrences.length, 1);
+
+  // The order given is the order recorded.
+  const swapped = await importPaths(directory, [second, first]);
+  assert.deepEqual(
+    swapped.roots.map(({ id, locator }) => [id, locator]),
+    [
+      ['r1', resolve(second)],
+      ['r2', resolve(first)],
+    ],
+  );
+  assert.equal(swapped.newArtifacts, 0);
+});
+
+test('overlapping roots are refused before anything is captured', async (t) => {
+  const { base, directory, root } = await project(t);
+  await tree(root, { 'sub/inner.txt': 'inner', 'file.txt': 'file' });
+  const overlapping = [
+    [root, root],
+    [root, join(root, 'sub')],
+    [join(root, 'sub'), root],
+    [root, join(root, 'file.txt')],
+    [root, join(root, 'sub', '..')],
+    [join(root, 'file.txt'), join(root, 'sub', '..', 'file.txt')],
+  ];
+  for (const inputs of overlapping) {
+    await assert.rejects(
+      importPaths(directory, inputs),
+      /overlap; every input must belong to exactly one root/,
+      inputs.join(' + '),
+    );
+  }
+  // Also when one root is named through a linked ancestor of the other.
+  await symlink(root, join(base, 'alias'), posix ? 'dir' : 'junction');
+  await assert.rejects(
+    importPaths(directory, [join(base, 'alias', 'sub'), root]),
+    /overlap/,
+  );
+  const inspection = await inspectProject(directory);
+  assert.deepEqual(inspection.artifacts, []);
+  assert.deepEqual(inspection.occurrences, []);
+});
+
+test('a missing or linked root refuses the whole acquisition, even after an available one', async (t) => {
+  const { base, directory, root } = await project(t);
+  await tree(root, { 'kept.txt': 'kept' });
+  await assert.rejects(importPaths(directory, [root, join(base, 'missing')]), {
+    code: 'ENOENT',
+  });
+  await symlink(root, join(base, 'link'), posix ? 'dir' : 'junction');
+  await assert.rejects(
+    importPaths(directory, [root, join(base, 'link')]),
+    /symbolic link/,
+  );
+  await assert.rejects(importPaths(directory, []), /at least one path/);
+  // Checked before capture, so not even the available root was stored.
+  const inspection = await inspectProject(directory);
+  assert.deepEqual(inspection.artifacts, []);
+  assert.deepEqual(inspection.occurrences, []);
+});
+
+test('the project store is excluded in whichever root contains it, and skips name their root', async (t) => {
+  const base = await temporary(t);
+  const directory = join(base, 'project');
+  const other = join(base, 'other');
+  await initializeProject(directory);
+  await tree(directory, { 'notes.txt': 'notes' });
+  await tree(other, { 'o.txt': 'other' });
+  await tree(base, { 'elsewhere/x.txt': 'x' });
+  await symlink(
+    join(base, 'elsewhere'),
+    join(other, 'link'),
+    posix ? 'dir' : 'junction',
+  );
+  const result = await importPaths(directory, [other, directory]);
+  assert.deepEqual(result.excluded, [
+    { root: 'r2', path: '.sulai', reason: 'project-store' },
+  ]);
+  assert.deepEqual(result.skipped, [
+    { root: 'r1', path: 'link', reason: 'symbolic-link' },
+  ]);
+  assert.equal(result.status, 'partial');
+  assert.equal(result.entryCount, 2);
+});
+
+test('the CLI takes several paths as one acquisition', async (t) => {
+  const { base, directory } = await project(t);
+  await tree(base, { 'one/a.txt': 'a', 'two/b.txt': 'b' });
+  const result = spawnSync(
+    process.execPath,
+    [cli, 'import', directory, join(base, 'one'), join(base, 'two')],
+    { encoding: 'utf8' },
+  );
+  assert.equal(result.status, 0, result.stderr);
+  const printed = JSON.parse(result.stdout) as {
+    roots: { id: string }[];
+    entryCount: number;
+  };
+  assert.deepEqual(
+    printed.roots.map((root) => root.id),
+    ['r1', 'r2'],
+  );
+  assert.equal(printed.entryCount, 2);
+  assert.equal((await occurrenceFiles(directory)).length, 1);
 });

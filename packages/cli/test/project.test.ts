@@ -642,7 +642,7 @@ test('CLI initializes, imports, inspects, and interprets in separate processes',
   assert.deepEqual(imported, {
     occurrenceId: imported.occurrenceId,
     status: 'complete',
-    root: { kind: 'file', locator: fixture },
+    roots: [{ id: 'r1', kind: 'file', locator: fixture }],
     entryCount: 1,
     newArtifacts: 1,
     existingArtifacts: 0,
