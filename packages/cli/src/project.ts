@@ -1490,8 +1490,8 @@ export async function projectStatus(directory: string) {
 /**
  * One line of a revision's page and the exact evidence each of its references
  * points to. A line is only a line in this revision, not a semantic item. Each
- * cited artifact is verified by streaming before its range is read, and the
- * range is read with bounded memory.
+ * distinct cited artifact is verified by streaming once, before any of its
+ * ranges is read, and each range is read with bounded memory.
  */
 export async function explainLine(
   directory: string,
@@ -1502,6 +1502,8 @@ export async function explainLine(
   const id = parseStateId(state);
   const revision = await readStoredState(project.states, id);
   const lines = pageLines(await readPage(project, revision.page));
+  // Reading the page verified it, so a page that cites itself is not hashed again.
+  const verified = new Set<ArtifactId>([revision.page]);
   const line = Number(lineNumber);
   if (!Number.isSafeInteger(line) || line < 1 || line > lines.length) {
     throw new ValidationError(`The page has ${lines.length} lines`);
@@ -1530,7 +1532,10 @@ export async function explainLine(
       references.push({ ...reference, where });
       continue;
     }
-    await verifyStoredArtifact(project.artifacts, reference.artifact);
+    if (!verified.has(reference.artifact)) {
+      await verifyStoredArtifact(project.artifacts, reference.artifact);
+      verified.add(reference.artifact);
+    }
     const evidence = await readRange(
       artifactPath(project.artifacts, reference.artifact),
       reference.startByte,

@@ -330,9 +330,10 @@ published first and the revision last, by the never-replace hard-link protocol, 
 a failure leaves at most an unreferenced page artifact.
 
 **Reading.** `sulai status <project>` prints every head with its page and the
-reference counts recorded in it, and hashes nothing. `sulai why <project>
-<state-id> <line>` returns, for each reference on that line of the page, its
-resolution and, when resolved, the exact bytes. It first verifies the cited
+reference counts recorded in it. It verifies every stored revision and each head's
+page against their names, and never reads the evidence the pages cite. `sulai why
+<project> <state-id> <line>` returns, for each reference on that line of the page,
+its resolution and, when resolved, the exact bytes. It first verifies the cited
 artifact's hash by streaming, then reads only the range, at most 1 MiB of it per
 reference, marking a cut-off as `truncated`. `sulai diff <project> <a> <b>`
 lists the page lines removed and added, in order.

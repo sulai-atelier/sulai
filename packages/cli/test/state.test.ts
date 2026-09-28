@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import {
   mkdir,
@@ -200,13 +201,13 @@ test('the parent is the one head, several heads are never chosen between, and st
     ),
     /There are 2 heads; name the parent with --parent/,
   );
-  const merged = await recordState(
+  const extended = await recordState(
     directory,
     await page(elsewhere, 'd.md', 'four\n'),
     occurrenceId,
     second.id,
   );
-  assert.equal(merged.parent, second.id);
+  assert.equal(extended.parent, second.id);
   await assert.rejects(
     recordState(
       directory,
@@ -216,8 +217,62 @@ test('the parent is the one head, several heads are never chosen between, and st
     ),
     /parent state is not stored/,
   );
+  // One parent per revision: extending one head leaves the fork open.
   const after = await projectStatus(directory);
-  assert.equal(after.heads.length, 2);
+  assert.deepEqual(
+    after.heads.map((head) => head.id).sort(),
+    [branch.id, extended.id].sort(),
+  );
+  await assert.rejects(
+    recordState(directory, await page(elsewhere, 'e.md', 'x\n'), occurrenceId),
+    /There are 2 heads/,
+  );
+});
+
+test('status hashes every revision and each head page, never the cited evidence', async (t) => {
+  const { directory, occurrenceId, elsewhere } = await setup(t);
+  const headPage = 'b `r1/evidence/lf.md#L3`\n';
+  const first = await recordState(
+    directory,
+    await page(elsewhere, 'a.md', 'a `r1/evidence/lf.md#L2`\n'),
+    occurrenceId,
+  );
+  const head = await recordState(
+    directory,
+    await page(elsewhere, 'b.md', headPage),
+    occurrenceId,
+  );
+  const store = join(directory, '.sulai');
+  const artifact = (content: string) =>
+    join(
+      store,
+      'artifacts',
+      `${hashContent(Buffer.from(content)).slice(7)}.raw`,
+    );
+  async function corrupted(path: string, check: () => Promise<unknown>) {
+    const original = await readFile(path);
+    await writeFile(path, Buffer.concat([original, Buffer.from(' ')]));
+    await check();
+    await writeFile(path, original);
+  }
+  await corrupted(artifact(EVIDENCE['lf.md'] as string), async () => {
+    const status = await projectStatus(directory);
+    assert.deepEqual(
+      status.heads.map((item) => item.id),
+      [head.id],
+    );
+    await assert.rejects(
+      explainLine(directory, head.id, 1),
+      /hash does not match/,
+    );
+  });
+  await corrupted(artifact(headPage), () =>
+    assert.rejects(projectStatus(directory), /hash does not match/),
+  );
+  await corrupted(
+    join(store, 'states', `${first.id.slice('state:v1:'.length)}.json`),
+    () => assert.rejects(projectStatus(directory), /hash does not match/),
+  );
 });
 
 test('diff lists the lines removed and added, in order, and nothing else', async (t) => {
@@ -279,6 +334,76 @@ test('why verifies the cited artifact first and reads a bounded range', async (t
     explainLine(directory, recorded.id, 1),
     /hash does not match/,
   );
+});
+
+/** Counts how many times anything computes each hex SHA-256 digest from now on. */
+function countDigests(t: TestContext) {
+  const counts = new Map<string, number>();
+  const original = crypto.createHash;
+  const mocked = t.mock.method(crypto, 'createHash', ((
+    ...args: Parameters<typeof crypto.createHash>
+  ) => {
+    const hash = original(...args);
+    const digest = hash.digest.bind(hash) as (encoding?: 'hex') => unknown;
+    hash.digest = ((encoding?: 'hex') => {
+      const value = digest(encoding);
+      if (typeof value === 'string') {
+        counts.set(value, (counts.get(value) ?? 0) + 1);
+      }
+      return value;
+    }) as never;
+    return hash;
+  }) as never);
+  syncBuiltinESMExports();
+  t.after(() => {
+    mocked.mock.restore();
+    syncBuiltinESMExports();
+  });
+  return (id: string) => counts.get(id.slice('sha256:'.length)) ?? 0;
+}
+
+test('why verifies each distinct artifact once, however many references share it', async (t) => {
+  const base = await temporary(t);
+  const directory = join(base, 'project');
+  await initializeProject(directory);
+  const evidence = join(base, 'evidence');
+  await mkdir(evidence);
+  await writeFile(join(evidence, 'big.txt'), 'one\ntwo\nthree\nfour\n');
+  await writeFile(join(evidence, 'small.txt'), 'only\n');
+  // The page is imported too, so it cites an artifact that is itself.
+  const text =
+    'a `r1/big.txt#L1` b `r1/big.txt#L2` c `r1/big.txt#L3-L4`' +
+    ' d `r1/small.txt#L1` e `r1/page.md#L1` f `r1/missing.md#L1`\n';
+  await writeFile(join(evidence, 'page.md'), text);
+  const { occurrenceId } = await importPaths(directory, [evidence]);
+  const recorded = await recordState(
+    directory,
+    join(evidence, 'page.md'),
+    occurrenceId,
+  );
+  const revision = await inspectState(directory, recorded.id);
+  const artifactOf = (locator: string) => {
+    const reference = revision.references.find(
+      (item) => item.locator === locator,
+    );
+    assert.ok(reference?.status === 'resolved', locator);
+    return reference.artifact;
+  };
+  const big = artifactOf('r1/big.txt#L1');
+  const small = artifactOf('r1/small.txt#L1');
+  assert.equal(artifactOf('r1/page.md#L1'), revision.page);
+
+  const hashed = countDigests(t);
+  const explained = await explainLine(directory, recorded.id, 1);
+  assert.deepEqual(
+    explained.references.map((reference) =>
+      'evidence' in reference ? reference.evidence : reference.status,
+    ),
+    ['one', 'two', 'three\nfour', 'only', text.slice(0, -1), 'unresolved'],
+  );
+  assert.equal(hashed(big), 1);
+  assert.equal(hashed(small), 1);
+  assert.equal(hashed(revision.page), 1);
 });
 
 test('inspect proves each revision against its occurrence and refuses forged ones', async (t) => {

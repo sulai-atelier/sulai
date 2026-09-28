@@ -52,7 +52,8 @@ links. The exact encoding is in [the source format](../source-format.md#state-re
 **Reading:**
 
 - **`sulai status <project>`** prints every head: its page and the counts recorded at record time.
-  With several heads it names no winner. It hashes nothing, so it stays cheap over large evidence.
+  With several heads it names no winner. It hashes every stored revision and each head's page, but
+  never reads the evidence the pages cite, so large evidence does not slow it down.
 - **`sulai why <project> <state-id> <line>`** takes one line of that page, not a semantic item. For
   each reference on it, it returns the resolution and, when resolved, the exact bytes. It verifies
   the artifact's hash by streaming before it reads the range, and cuts off output over 1 MiB per
@@ -70,11 +71,17 @@ checking its state history, so versions 1 to 3 are refused. This pre-alpha does 
 ## Consequences
 
 A state page becomes a recorded, versioned view whose every line can be followed to preserved bytes,
-or shown to rest on nothing. Divergent views stay side by side as heads until someone records a
-revision that names one as its parent.
+or shown to rest on nothing.
 
-Resolution happens once. `status` is cheap, `why` pays for one artifact's hash, and `inspect` pays
-for all of them.
+A fork does not close. A revision has exactly one parent, so no revision can join two heads:
+recording on one head extends it and leaves the others as heads. Once a project has forked, `status`
+reports every head from then on, and every recording has to name its parent. A fork comes from
+`--parent` naming a revision that already has a child, or from two recordings made at once, which
+can both choose the same parent because nothing locks the store. Joining views would need a merge,
+which this decision does not include.
+
+Resolution happens once. `status` hashes no evidence, `why` hashes only the evidence its one line
+cites, and `inspect` hashes all of it.
 
 `why` prints evidence bytes to the terminal. Those bytes can be sensitive; see
 [SECURITY.md](../../SECURITY.md).
