@@ -20,33 +20,61 @@ State revisions sit on top: a page saying where a project stands, each reference
 on it resolved to exact preserved bytes or marked unresolved, with `status`,
 `why` and `diff` to read them. Storage is at format version 4.
 
-## Now: the smallest practical status primitive
+Two limits of the format are known. A fork never rejoins, because a revision has
+one parent. A citation recorded against a new acquisition can point at different
+bytes if the file was edited above the cited lines.
 
-A pilot on Sulai's own development, with its evaluation fixed in advance, asked
-whether Sulai can keep a small, useful picture of where a project stands, rebuilt
-from the project's observable work, without the user maintaining it and without
-claiming objective truth. It passed both of its stages on that one project. A page
-rebuilt from evidence held up against a hand-kept one and caught drift the
-hand-kept one missed. As a handoff for one real task it did at least as well, with
-less unnecessary change. That is one project and one task, not evidence that the
-approach works in general.
+## How we got here
 
-State revisions are the smallest primitive built to reproduce that value. Sulai
-does not write the page or judge it; it records the page and exactly what the page
-cites. Structured items, semantic diff and merge are left out until use shows a
-need. See [ADR 0007](docs/adr/0007-state-revisions-record-a-view-and-its-evidence.md).
+A pilot on Sulai's own development asked whether Sulai can keep a small, useful
+picture of where a project stands, rebuilt from the project's observable work,
+without the user maintaining it and without claiming objective truth. It passed on
+that one project: a page rebuilt from evidence caught drift that a hand-kept one
+missed. State revisions were built to record such a page. Sulai does not write the
+page or judge it; it records the page and exactly what the page cites. See
+[ADR 0007](docs/adr/0007-state-revisions-record-a-view-and-its-evidence.md).
 
-The pilot did not classify who said or decided something. Speaker and authorship
-are not the axis that determines project state.
+Internal trials of that primitive, each with its evaluation fixed in advance,
+showed:
+
+- **Pointer integrity is not support.** Every citation on a page can resolve while
+  some lines are not supported by what they cite. A producer that checked each line
+  against its exact evidence and repaired it reached full support on one run.
+- **Regenerating state makes `diff` noisy.** On unchanged evidence, a page written
+  from scratch reworded most of its lines. A page updated from its previous revision
+  changed none of them, and cost far less to produce.
+- **Injected state did not help local tasks.** For two self-contained code fixes,
+  an agent given the state page did no better than one given the repository and
+  ordinary notes. Neither needed the project's wider context.
+
+These cover one project, and the trials used private project material, so their
+data is not published here.
+
+## Now: use it on real work
+
+The next evidence has to come from real use, not more trials. The working model:
+
+- The state page is maintained from its previous revision, as part of the work,
+  and only when the project's state actually changed.
+- It is read when a task needs project context, and not handed to every task.
+- A project keeps one line of revisions, so that forks do not arise yet.
+- When a revision carries a citation forward to a new acquisition, the citation
+  is checked for whether it still points at the same bytes.
+
+What is measured is whether this removes work: context nobody had to reconstruct,
+stale assumptions caught, and what keeping the page current cost.
 
 ## Later
 
-- **A second source.** Still important, but no longer next. Its job is to test
-  whether a state model learned on one project holds when the evidence has a very
-  different structure. Official provider exports remain the intended path.
+These wait until real use shows the need:
+
+- **Joining forks and stable citations.** Both known limits would need a format
+  change, and that should come from a real case.
+- **A second source.** Its job is to test whether a state model learned on one
+  project holds when the evidence has a very different structure. Official
+  provider exports remain the intended path.
 - **Divergent work.** Comparing independently evolved work, and surfacing conflicts
-  that matter without manufacturing agreement, remains part of the direction. Its
-  design waits on the first status primitive.
+  that matter without manufacturing agreement, remains part of the direction.
 - **The experimental Claude Code reader** stays as it is: kept, not extended,
   until a concrete need requires more from it.
 

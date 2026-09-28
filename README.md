@@ -48,17 +48,30 @@ tools, documents, and code stays understandable and continuable: where it stands
 now, what is open, what changed, where its sources diverge, and the evidence for
 each.
 
-A pilot on Sulai's own development, with its evaluation fixed in advance, asked
-whether a small, evidence-backed picture of where a project stands can be rebuilt
-from its observable work, without the user maintaining it and without claiming
-objective truth. It passed both of its stages on that one project. That is one
-project, not evidence that the approach works in general.
-
-State revisions are the smallest primitive built to reproduce that value:
+A pilot on Sulai's own development asked whether a small, evidence-backed picture
+of where a project stands can be rebuilt from its observable work. It passed on
+that one project. State revisions were then built to record such a picture:
 `sulai status` shows where a project stands, `sulai why` the exact evidence behind
-one line, and `sulai diff` how the page changed. They have no structured items,
-semantic diff or merge; those wait until use shows a need. See
+one line, and `sulai diff` how the page changed. See
 [ADR 0007](docs/adr/0007-state-revisions-record-a-view-and-its-evidence.md).
+
+Internal trials since then, each with its evaluation fixed in advance, changed the
+direction:
+
+- **A citation that resolves is not a citation that supports its line.** Sulai
+  checks the pointer; whoever writes the page still has to check the claim.
+- **State should be maintained, not regenerated.** A page rewritten from scratch
+  on the same evidence reworded most of its lines, so `diff` showed change where
+  there was none. A page updated from its previous revision did not.
+- **State should be read when a task needs it.** On self-contained code tasks,
+  handing an agent the state page gave no benefit.
+- **The current format has two known limits.** A fork never rejoins, because a
+  revision has one parent. A citation recorded against a new acquisition can point
+  at different bytes if the file was edited above the cited lines.
+
+The current work is using Sulai on real projects, not adding schema or adapters.
+What gets built next depends on what that use shows. These trials cover one
+project and are not evidence that the approach works in general.
 
 Earlier versions of this README named provider adapters as the next focus. A
 second source remains important, through official provider exports, but it is no

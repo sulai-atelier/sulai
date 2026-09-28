@@ -77,7 +77,7 @@ test('locators name a root, a path and lines, and nothing else is a reference', 
     'r1/a.md',
     'r1/a.md#1',
     'r1/a.md#L1-2',
-    'sulai-wiki/log.md:12',
+    'notes/log.md:12',
     'npm test',
   ]) {
     assert.equal(parseLocator(text), null, text);
