@@ -63,12 +63,17 @@ A project keeps its records under `.sulai/`:
   tmp/            staging, recreated when needed
 ```
 
-Reads and writes stream in bounded chunks, so the only size limit is disk space.
+Preserving and verifying an artifact streams it in bounded chunks, so an
+artifact's size is limited only by disk space. Occurrence records and state
+revisions are read whole, up to 64 MiB, and a state page is at most 1 MiB.
+
 Every record is staged in `tmp/`, synced, and published by hard link, which fails
 rather than replace an existing name. Records are published in dependency order:
 artifacts before the occurrence that names them, a page before the revision that
-cites it. A crash can leave unreferenced bytes, never a record that names missing
-ones.
+cites it. An interrupted operation can leave unreferenced artifacts, never a
+record that names missing ones. This is not a guarantee across power loss; the
+[format specification](format.md#local-storage) states what is and is not
+promised.
 
 ## Packages
 

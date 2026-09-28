@@ -11,10 +11,10 @@ what is still open, and how the project came to stand where it does. The
 conversations are temporary; the project is not.
 
 Sulai gives the project a durable, local history. It preserves the original
-evidence exactly, and records versioned views of where the project stands, with
-every citation on them resolved to the exact bytes it points at. It checks the
-pointer, never the claim: it records what a view cites, and does not decide
-whether the view is right.
+evidence exactly, and records versioned views of where the project stands. Each
+citation on a view is resolved to exact preserved bytes, or recorded as unresolved
+with a reason. Sulai checks the pointer, never the claim: it records what a view
+cites, and does not decide whether the view is right.
 
 ## Status
 
@@ -26,7 +26,8 @@ What works:
 - a record of each acquisition: what was read, what each input became, and what
   could not be captured and why
 - several files or directories imported as one acquisition, without following links
-- versioned state pages whose citations resolve to exact preserved bytes
+- versioned state pages, each citation resolved to exact preserved bytes or
+  recorded as unresolved
 - `status`, `why` and `diff` over those pages
 - integrity checks from each state revision down to the bytes it cites
 
@@ -56,18 +57,25 @@ npm run cli -- import .tmp/example fixtures/synthetic.conversation.jsonl
 ```
 
 `import` prints an occurrence, the record of that acquisition, with its ID. Next,
-write a page saying where the project stands. It cites evidence as code spans:
-`r1#L2` is line 2 of the occurrence's first root.
+create `.tmp/STATE.md`, a page saying where the project stands. It cites evidence
+as code spans: `r1#L2` is line 2 of the occurrence's first root.
+
+```markdown
+# State
+
+- The first message names the project `r1#L2`
+```
+
+Record the page against the occurrence, then read it back:
 
 ```sh
-printf '# State\n- The first message names the project `r1#L2`\n' > .tmp/STATE.md
 npm run cli -- state record .tmp/example .tmp/STATE.md --from OCCURRENCE_ID
 npm run cli -- status .tmp/example
-npm run cli -- why .tmp/example STATE_ID 2
+npm run cli -- why .tmp/example STATE_ID 3
 npm run cli -- inspect .tmp/example
 ```
 
-`why` prints the exact bytes behind line 2 of the page. `inspect` verifies every
+`why` prints the exact bytes behind line 3 of the page. `inspect` verifies every
 artifact, occurrence and state revision against its identity. Commands print JSON
 and exit with status 1 on failure; an import that could not capture every input
 still records what it did and exits with status 3. `npm run cli -- --help` lists
