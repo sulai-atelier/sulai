@@ -12,7 +12,7 @@ import {
   interpretConversation,
   projectStatus,
   recordState,
-} from './project.js';
+} from './index.js';
 
 const usage = `Usage:
   sulai init <directory>

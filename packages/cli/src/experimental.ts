@@ -1,13 +1,13 @@
 /**
- * Experimental commands. Kept out of project.ts so that the storage module never
- * imports an experimental reader: storage preserves bytes, and what reads them
- * here can change or disappear without touching it.
+ * Experimental commands. Kept apart so that no storage module ever imports an
+ * experimental reader: storage preserves bytes, and what reads them here can
+ * change or disappear without touching it.
  */
 import {
   MAX_SESSION_BYTES,
   readClaudeCodeSession,
 } from '@sulai/experimental-claude-code';
-import { readStoredArtifact } from './project.js';
+import { readStoredArtifact } from './artifacts.js';
 
 /**
  * Reads the structure of a stored Claude Code session transcript. Returns

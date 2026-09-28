@@ -30,7 +30,7 @@ import {
   inspectArtifact,
   inspectProject,
   interpretConversation,
-} from '../dist/project.js';
+} from '../dist/index.js';
 
 const fixture = fileURLToPath(
   new URL('../../../fixtures/synthetic.conversation.jsonl', import.meta.url),

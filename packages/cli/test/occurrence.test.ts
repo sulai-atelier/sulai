@@ -25,7 +25,7 @@ import {
   initializeProject,
   inspectOccurrence,
   inspectProject,
-} from '../dist/project.js';
+} from '../dist/index.js';
 
 const cli = fileURLToPath(new URL('../dist/main.js', import.meta.url));
 const posix = process.platform !== 'win32';
