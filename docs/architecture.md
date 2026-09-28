@@ -108,7 +108,9 @@ Inside `packages/cli/src`:
 - A revision has one parent, so a fork never rejoins.
 - A citation is a path and line range within one occurrence. Resolved again
   against a newer occurrence, it can point at different bytes if its file changed
-  above those lines.
+  above those lines. Recording refuses that for citations kept from the parent
+  revision ([ADR 0008](adr/0008-a-kept-citation-keeps-its-evidence.md)), but
+  correcting them is still manual.
 - A revision cites exactly one occurrence, so refreshing a page means acquiring
   again everything it cites.
 - Nothing locks the store, so two recordings at once can fork the history.

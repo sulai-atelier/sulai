@@ -17,12 +17,22 @@ import {
   stateIdOf,
   ValidationError,
 } from '@sulai/core';
-import type { ArtifactId, StateId, StateRevision } from '@sulai/core';
+import type {
+  ArtifactId,
+  StateId,
+  StateReference,
+  StateRevision,
+} from '@sulai/core';
 import { readStoredArtifact } from './artifacts.js';
 import { readStoredOccurrence } from './occurrences.js';
 import { loadProject } from './project.js';
 import type { Project } from './project.js';
-import { pageLines, readRange, resolveReferences } from './references.js';
+import {
+  pageLines,
+  readRange,
+  resolveReferences,
+  sameEvidence,
+} from './references.js';
 import {
   artifactPath,
   readBounded,
@@ -145,17 +155,66 @@ export async function verifyState(
   }
 }
 
+/** A citation kept from the parent whose evidence is no longer the same bytes. */
+interface ChangedCitation {
+  readonly locator: string;
+  readonly lines: readonly number[];
+  readonly now: 'different-text' | 'unresolved';
+}
+
+/**
+ * Compares every citation the page keeps from its parent. A locator is a path
+ * and line range, so when its file changes it can still resolve while pointing
+ * at other text. That is caught here, where it would otherwise pass unseen.
+ */
+async function changedCitations(
+  project: Project,
+  parent: StateRevision,
+  references: readonly StateReference[],
+  page: string,
+): Promise<ChangedCitation[]> {
+  const before = new Map(
+    parent.references.map((reference) => [reference.locator, reference]),
+  );
+  const lines = pageLines(page);
+  const changed: ChangedCitation[] = [];
+  for (const reference of references) {
+    const old = before.get(reference.locator);
+    if (old === undefined || old.status !== 'resolved') continue;
+    let now: ChangedCitation['now'] | null = null;
+    if (reference.status !== 'resolved') now = 'unresolved';
+    else if (!(await sameEvidence(project, old, reference))) {
+      now = 'different-text';
+    }
+    if (now === null) continue;
+    changed.push({
+      locator: reference.locator,
+      lines: lines.flatMap((text, index) =>
+        extractLocators(text).includes(reference.locator) ? [index + 1] : [],
+      ),
+      now,
+    });
+  }
+  return changed;
+}
+
 /**
  * Records a state page as a new revision. The page is published first and the
  * revision last, so a revision never names bytes the store does not hold. With
  * no parent given, the one head is the parent; with several heads it refuses
  * and names them rather than choosing.
+ *
+ * The page is a file path, or the page's bytes, so a project needs no state
+ * file of its own. A citation kept from the parent must still point at the
+ * same text; otherwise nothing is recorded, unless `allowChangedCitations`
+ * says to record anyway.
  */
 export async function recordState(
   directory: string,
-  pageFile: string,
+  pageSource: string | Uint8Array,
   from: unknown,
   parent?: unknown,
+  options: { readonly allowChangedCitations?: boolean } = {},
 ) {
   const project = await loadProject(directory);
   const occurrenceId = parseOccurrenceId(from);
@@ -163,7 +222,18 @@ export async function recordState(
     project.occurrences,
     occurrenceId,
   );
-  const bytes = await readBounded(resolve(pageFile), MAX_STATE_PAGE_BYTES);
+  if (
+    typeof pageSource !== 'string' &&
+    pageSource.byteLength > MAX_STATE_PAGE_BYTES
+  ) {
+    throw new ValidationError(
+      `A state page must contain at most ${MAX_STATE_PAGE_BYTES} bytes`,
+    );
+  }
+  const bytes =
+    typeof pageSource === 'string'
+      ? await readBounded(resolve(pageSource), MAX_STATE_PAGE_BYTES)
+      : Buffer.from(pageSource);
   let page: string;
   try {
     page = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(
@@ -193,6 +263,26 @@ export async function recordState(
     occurrence,
     extractLocators(page),
   );
+  const changed =
+    parentId === null
+      ? []
+      : await changedCitations(
+          project,
+          revisions.get(parentId) as StateRevision,
+          references,
+          page,
+        );
+  if (changed.length > 0 && options.allowChangedCitations !== true) {
+    const list = changed
+      .map(
+        (item) =>
+          `  ${item.locator} (page line ${item.lines.join(', ')}): ${item.now === 'unresolved' ? 'no longer resolves' : 'now points at different text'}`,
+      )
+      .join('\n');
+    throw new ValidationError(
+      `${changed.length} citation(s) kept from the parent no longer cite the same text:\n${list}\nCorrect them, or record anyway with --allow-changed-citations.`,
+    );
+  }
   const pageId = hashContent(bytes);
   await writeImmutable(
     project.temporary,
@@ -220,6 +310,7 @@ export async function recordState(
   return {
     ...summarizeState(id, revision),
     references: countReferences(revision),
+    changedCitations: changed,
   };
 }
 

@@ -576,3 +576,112 @@ test('the CLI records, shows, explains and diffs state', async (t) => {
   const inspected = run(['inspect', directory, second.id]);
   assert.equal(inspected.status, 0, inspected.stderr);
 });
+
+/** A project with one evidence directory, acquired again after each change. */
+async function evolving(t: TestContext) {
+  const base = await temporary(t);
+  const directory = join(base, 'project');
+  await initializeProject(directory);
+  const evidence = join(base, 'evidence');
+  await mkdir(evidence);
+  const acquire = async (files: Record<string, string>) => {
+    for (const [name, text] of Object.entries(files)) {
+      await writeFile(join(evidence, name), text);
+    }
+    return (await importPaths(directory, [evidence])).occurrenceId;
+  };
+  return { base, directory, evidence, acquire };
+}
+
+test('a citation kept from the parent must still cite the same text', async (t) => {
+  const { base, directory, evidence, acquire } = await evolving(t);
+  const text =
+    '# State\n- Uses SQLite `r1/plan.md#L2`\n- Owner `r1/team.md#L1`\n';
+  const first = await recordState(
+    directory,
+    await page(base, 'p.md', text),
+    await acquire({ 'plan.md': 'plan\nsqlite\n', 'team.md': 'ana\n' }),
+  );
+  assert.deepEqual(first.changedCitations, []);
+
+  // A line inserted above moves `sqlite` to line 3; line 2 still resolves.
+  const moved = await acquire({ 'plan.md': 'plan\nnote\nsqlite\n' });
+  const states = join(directory, '.sulai', 'states');
+  await assert.rejects(
+    recordState(directory, await page(base, 'p.md', text), moved),
+    (error: Error) =>
+      /1 citation\(s\) kept from the parent/.test(error.message) &&
+      /r1\/plan\.md#L2 \(page line 2\): now points at different text/.test(
+        error.message,
+      ) &&
+      /--allow-changed-citations/.test(error.message),
+  );
+  assert.equal((await readdir(states)).length, 1);
+
+  // Recording anyway is explicit, and the result says what changed.
+  const forced = await recordState(
+    directory,
+    await page(base, 'p.md', text),
+    moved,
+    undefined,
+    { allowChangedCitations: true },
+  );
+  assert.deepEqual(forced.changedCitations, [
+    { locator: 'r1/plan.md#L2', lines: [2], now: 'different-text' },
+  ]);
+
+  // A change elsewhere in a file leaves its cited text alone.
+  const corrected = text.replace('#L2`', '#L3`');
+  const next = await recordState(
+    directory,
+    await page(base, 'p.md', corrected),
+    await acquire({ 'plan.md': 'plan\nnote\nsqlite\nlater\n' }),
+  );
+  assert.deepEqual(next.changedCitations, []);
+  assert.equal(next.parent, forced.id);
+
+  // A kept citation whose file is gone no longer resolves.
+  await rm(join(evidence, 'team.md'));
+  await assert.rejects(
+    recordState(
+      directory,
+      await page(base, 'p.md', corrected),
+      (await importPaths(directory, [evidence])).occurrenceId,
+    ),
+    /r1\/team\.md#L1 \(page line 3\): no longer resolves/,
+  );
+});
+
+test('a page can be given as bytes, so a project needs no state file', async (t) => {
+  const { directory, acquire } = await evolving(t);
+  const occurrenceId = await acquire({ 'plan.md': 'plan\nsqlite\n' });
+  const recorded = await recordState(
+    directory,
+    Buffer.from('# State\n- Uses SQLite `r1/plan.md#L2`\n'),
+    occurrenceId,
+  );
+  assert.equal(recorded.references.resolved, 1);
+  const status = await projectStatus(directory);
+  assert.equal(
+    status.heads[0]?.page,
+    '# State\n- Uses SQLite `r1/plan.md#L2`\n',
+  );
+  await assert.rejects(
+    recordState(directory, new Uint8Array(1024 * 1024 + 1), occurrenceId),
+    /at most 1048576 bytes/,
+  );
+
+  // The CLI reads a page from standard input when it is given as -.
+  const result = spawnSync(
+    process.execPath,
+    [cli, 'state', 'record', directory, '-', '--from', occurrenceId],
+    { encoding: 'utf8', input: '# State\n- Plan `r1/plan.md#L1`\n' },
+  );
+  assert.equal(result.status, 0, result.stderr);
+  const piped = JSON.parse(result.stdout) as {
+    parent: string;
+    changedCitations: unknown[];
+  };
+  assert.equal(piped.parent, recorded.id);
+  assert.deepEqual(piped.changedCitations, []);
+});

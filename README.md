@@ -117,7 +117,8 @@ The [project principles](docs/principles.md) define these in full.
 
 - A state history that forks never rejoins, because a revision has one parent.
 - A citation carried forward to a new acquisition can point at different bytes if
-  its file changed above the cited lines.
+  its file changed above the cited lines. Recording refuses that for citations kept
+  from the previous revision, but correcting them is still manual.
 - A citation that resolves shows what a line points at, not that the line is right.
 - People and agents write state pages; Sulai records and checks them.
 

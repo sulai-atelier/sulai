@@ -5,25 +5,38 @@ understandable and continuable: where it stands now, how it got there, and the
 evidence for each part. This roadmap describes direction, not dates or a
 commitment to a particular implementation.
 
-## Now: real use
+## Now: an agent can operate it
 
-Preservation, acquisition records and state revisions exist; see the
-[README](README.md#status). The next evidence has to come from using them on real
-projects. For now this is a working procedure that people and agents follow.
-Sulai automates none of it:
+Using Sulai today means cloning and building it, preparing snapshots of a
+project, and writing a state page with line citations by hand. That is too much
+for anyone, developers included, and it is not the product. The engine exists;
+what is missing is a front door that an AI agent already working on a project
+can use, so that the person never handles snapshots, roots, identifiers or
+citation syntax, and only asks where the project stands, what changed, and why.
 
-- A state page is maintained from its previous revision, as part of the work, and
-  only when the project's state actually changed. A page regenerated from scratch
-  rewords most of its lines, so `diff` would show change where there was none.
-- It is read when a task needs the project's wider context, not handed to every
-  task. Self-contained code tasks gained nothing from it.
-- A project keeps one line of revisions, so that forks do not arise yet.
-- When a revision carries a citation forward to a new acquisition, whoever records
-  it checks that the citation still points at the same bytes.
+The work, in order:
 
-The question is whether this removes work: context nobody had to reconstruct,
-stale assumptions caught before they did damage. And what keeping the page
-current costs.
+- **Kept citations keep their evidence.** Recording refuses a page whose kept
+  citations now point at different text. Done:
+  [ADR 0008](docs/adr/0008-a-kept-citation-keeps-its-evidence.md).
+- **No state file needed.** A page can be recorded from standard input. Done.
+- **Git-aware capture.** For a Git repository, capture its tracked files at a
+  commit, and record that commit, instead of copying the working folder with its
+  dependencies and build output. This changes what an acquisition record says, so
+  it is designed in an ADR before any code, starting with the committed HEAD.
+- **The local flow, end to end.** An agent sets up Sulai in an ordinary project,
+  keeps its state as it works, and answers from it, with no Sulai concepts
+  handed to the person.
+- **An installable pre-alpha.** A published CLI instead of a clone and a build.
+
+Sulai itself does not call a model. The agent doing the work decides what
+changed; Sulai captures, checks and records.
+
+## Next: real use outside Sulai
+
+Once an agent can operate Sulai this way, it goes to a few developers working
+with coding agents on real projects. What gets built after that comes from the
+friction that recurs across projects.
 
 ## Later, when real use shows the need
 

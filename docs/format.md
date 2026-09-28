@@ -331,6 +331,14 @@ given, recording refuses and lists them. Time never chooses. The page artifact i
 published first and the revision last, by the never-replace hard-link protocol, so
 a failure leaves at most an unreferenced page artifact.
 
+The page may be given as `-`, to read it from standard input. With a parent, every
+citation the page keeps from the parent, and that resolved there, must still cite
+the same bytes. If one now cites different text or no longer resolves, recording is
+refused and names each such citation and its page lines, unless
+`--allow-changed-citations` is given; the result then lists them as
+`changedCitations`. See
+[ADR 0008](adr/0008-a-kept-citation-keeps-its-evidence.md).
+
 **Reading.** `sulai status <project>` prints every head with its page and the
 reference counts recorded in it. It verifies every stored revision and each head's
 page against their names, and never reads the evidence the pages cite. `sulai why
