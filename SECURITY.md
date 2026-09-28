@@ -25,8 +25,9 @@ The CLI runs locally and does not send data over the network.
 **Import accepts arbitrary bytes and performs no format validation.** It streams,
 holding at most 1 MiB of an artifact in memory, and has no size ceiling: the limit
 is available disk space. Storing material is not an assertion that it is
-meaningful or safe. Raw content is never executed, and no stored bytes are parsed
-unless a command explicitly interprets them.
+meaningful or safe. Imported content is never executed, and never interpreted
+through a format unless a command such as `interpret` is asked to. `state record`,
+`inspect` and `why` read cited ranges only as UTF-8 lines.
 
 **Acquisition reads only the paths you name.** Importing a directory walks it
 recursively, but never follows symbolic links or junctions and never reads content
@@ -46,9 +47,9 @@ detects growth and truncation only; an in-place overwrite at the same length is 
 detected, so do not rely on capturing a file another process is still writing. Stored content integrity
 does not depend on that check, because it is verified by SHA-256.
 
-`interpret` is the only stable command that parses, and only through the versioned
-synthetic conversation format, which limits input to 1 MiB and 10,000 messages and
-rejects malformed references. Its output is JSON **including source content**, so
+`interpret` is the only stable command that reads imported content through a
+format. It uses only the versioned synthetic conversation format, which limits
+input to 1 MiB and 10,000 messages and rejects malformed references. Its output is JSON **including source content**, so
 treat captured stdout as potentially sensitive. `inspect` verifies identity and
 never emits stored content, though inspecting an occurrence prints its paths and
 root locations.

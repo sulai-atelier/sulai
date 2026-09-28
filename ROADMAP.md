@@ -52,14 +52,16 @@ data is not published here.
 
 ## Now: use it on real work
 
-The next evidence has to come from real use, not more trials. The working model:
+The next evidence has to come from real use, not more trials. For now this is a
+working procedure, followed by whoever does the work. Sulai does not automate any
+of it:
 
 - The state page is maintained from its previous revision, as part of the work,
   and only when the project's state actually changed.
 - It is read when a task needs project context, and not handed to every task.
 - A project keeps one line of revisions, so that forks do not arise yet.
-- When a revision carries a citation forward to a new acquisition, the citation
-  is checked for whether it still points at the same bytes.
+- When a revision carries a citation forward to a new acquisition, the person or
+  agent recording it checks whether it still points at the same bytes.
 
 What is measured is whether this removes work: context nobody had to reconstruct,
 stale assumptions caught, and what keeping the page current cost.

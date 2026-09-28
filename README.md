@@ -3,8 +3,8 @@
 Open-source version control for human + AI thinking.
 
 AI-assisted work is spread across conversations, models, documents, and people.
-Copying context between them loses history: what changed, what was rejected,
-where a claim came from, and why a decision became current.
+Copying context between them loses history: what changed, where a claim came from,
+what is still open, and how the project came to stand where it does.
 
 Sulai is being built to preserve that history and turn fragmented work into a
 traceable, versioned project state. The project, not the chat, is the durable unit.

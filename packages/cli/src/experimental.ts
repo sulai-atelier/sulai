@@ -12,7 +12,8 @@ import { readStoredArtifact } from './project.js';
 /**
  * Reads the structure of a stored Claude Code session transcript. Returns
  * record kinds, the uuid tree and exact source units. Never returns message
- * text, so the output is safe to share where the transcript is not.
+ * text. The output still carries transcript metadata, such as record ids and
+ * types, so treat it as sensitive.
  */
 export async function readClaudeCodeSessionArtifact(
   directory: string,

@@ -71,3 +71,9 @@ on hidden model chain-of-thought.
 No replacement schema is decided here. The implementation is unaffected, because
 no acceptance or state object was ever built. How project state is represented
 is still open; the [roadmap](../../ROADMAP.md) describes the next step.
+
+## Later note (2026-09-28)
+
+[ADR 0007](0007-state-revisions-record-a-view-and-its-evidence.md) introduced the
+first representation of project state: a state revision records a page and exactly
+what it cites. It adopts no schema of semantic items.
