@@ -131,7 +131,7 @@ The [project principles](docs/principles.md) define these in full.
   its file changed above the cited lines. Recording refuses that for citations kept
   from the previous revision, but correcting them is still manual.
 - A citation that resolves shows what a line points at, not that the line is right.
-- Git capture reads the commit at HEAD only, and needs git 2.44 or later.
+- Git capture reads the commit at HEAD only, and needs git 2.45 or later.
 - People and agents write state pages; Sulai records and checks them.
 
 ## Documentation

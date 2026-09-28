@@ -82,8 +82,10 @@ export interface GitRoot {
   readonly commit: string;
   readonly tree: string;
   /**
-   * Whether the working tree matched the commit when it was read: `clean`,
-   * `differs` when captured anyway, or `absent` for a bare repository.
+   * What Sulai's own check of the working tree found when the commit was read:
+   * `clean`, `differs` when captured anyway, or `absent` for a bare repository.
+   * The check runs no filter program, so it can find a difference where Git,
+   * running the filter, would not. It is not Git's verdict.
    */
   readonly worktree: WorktreeState;
   readonly platform: string;

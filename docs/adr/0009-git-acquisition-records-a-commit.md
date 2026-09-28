@@ -1,8 +1,9 @@
 # ADR 0009: A Git acquisition records a commit, not a working folder
 
 Status: Accepted. Adds occurrence version 2 and state revision version 2, and raises the storage
-format to version 5. Corrected during implementation: the working-tree check turns filter drivers
-off, checks a submodule only by its commit, and does not count the project's own store.
+format to version 5. Narrows one rule of
+[ADR 0005](0005-import-occurrences-record-acquisition-events.md); see "Artifacts stay source-neutral".
+Corrected during implementation, in "How Git is run" and "Uncommitted work".
 
 ## Context
 
@@ -81,15 +82,19 @@ it reads. So Sulai never relies on the user's configuration for these, and sets 
 - **No replacement objects.** Replacement refs are ignored (`--no-replace-objects`,
   `GIT_NO_REPLACE_OBJECTS=1`), so the bytes read are the objects the commit actually names.
 - **No writes.** Optional locks are disabled (`--no-optional-locks`, `GIT_OPTIONAL_LOCKS=0`), so
-  checking the working tree does not refresh the index.
+  checking the working tree does not refresh the index. Trace output is off: inherited `GIT_TRACE*`
+  variables, and on Windows `GIT_REDIRECT_*`, are removed, and `GIT_TRACE2`, `GIT_TRACE2_EVENT` and
+  `GIT_TRACE2_PERF` are set to `0`. Those variables override a Trace2 target set in system or global
+  configuration, which a `-c` setting does not, because Git reads that configuration first.
 - **No external programs.** `core.fsmonitor` is off, there is no pager, and only plumbing and status
   commands run. `status` rehashes a file whose cached details are stale through that file's filter,
   and the Git LFS filter also writes to the repository, so every configured filter driver is turned
   off for the check. No hook, filter or textconv program runs.
-- **Explicit flags.** The status check passes its own flags, such as `--untracked-files=all` and
-  `--ignore-submodules=dirty`, rather than taking them from configuration. A submodule counts as
-  changed when a different commit is checked out in it. Its own working tree belongs to another
-  repository, which Sulai never enters; `none` would run Git inside it.
+- **Explicit flags.** The status check passes its own flags, such as `--untracked-files=normal` and
+  `--ignore-submodules=dirty`, rather than taking them from configuration. An untracked folder is
+  reported whole, so Git never lists every file in one, the project's own store included. A
+  submodule counts as changed when a different commit is checked out in it. Its own working tree
+  belongs to another repository, which Sulai never enters; `none` would run Git inside it.
 - **Git's own safety settings stay.** Sulai does not override `safe.directory` or similar.
 
 Sulai checks that the `git` it finds supports these switches, and refuses Git acquisition if it does
@@ -106,8 +111,13 @@ work, so its untracked files do not count when it lies inside the working tree.
 - **The root records `worktree`:** `clean`, `differs` (captured anyway), or `absent` (a bare
   repository).
 
-The record is truthful either way: it names the commit, and says whether the working tree matched
-it. Refusing by default is a fail-safe for the caller, most likely an agent that has just changed
+`worktree` is what Sulai's own check found, not Git's verdict. The check runs no filter program, so
+a file whose working copy a filter transforms, such as one Git LFS has smudged, counts as differing
+once its cached details are stale, where Git would run the filter and call it clean. The check
+refuses rather than run the program.
+
+The record is truthful either way: it names the commit, and says what the check of the working tree
+found. Refusing by default is a fail-safe for the caller, most likely an agent that has just changed
 files and could mistake the committed evidence for its current work. It is a policy of the command,
 not part of what a Git acquisition means, so real use can change the default without changing the
 format.
@@ -128,6 +138,14 @@ rule of the format.
 A state page cites `r1/src/server.ts#L30-L38` whether `r1` is a folder or a commit. Resolution finds
 the entry by root and path and cuts the range from its artifact, as it does now. The kept-citation
 check of ADR 0008 applies unchanged.
+
+### Artifacts stay source-neutral
+
+[ADR 0005](0005-import-occurrences-record-acquisition-events.md) kept every source's concepts out of
+core and the record. That still holds for artifacts: bytes are preserved the same way whatever they
+came from. It no longer holds for an occurrence. A Git root records Git's commit, tree and blob IDs
+and its modes, because a commit's identity cannot be stated honestly in generic filesystem terms.
+Provenance may carry source-specific facts when generic metadata cannot represent the source.
 
 ### Format and compatibility
 

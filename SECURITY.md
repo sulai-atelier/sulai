@@ -24,9 +24,10 @@ The CLI runs locally and does not send data over the network.
 
 **Git capture runs the local `git`, and never lets it fetch or write.** It runs
 only plumbing commands and `status`, with lazy fetching, replacement objects and
-optional locks turned off, `core.fsmonitor` off, no pager, and every configured
-filter driver turned off for the working-tree check. So nothing is fetched, the
-repository is not written, and no hook, filter or fsmonitor program runs. On
+optional locks turned off, trace output off whether the environment or system or
+global configuration asks for it, `core.fsmonitor` off, no pager, and every
+configured filter driver turned off for the working-tree check. So nothing is
+fetched, nothing is written, and no hook, filter or fsmonitor program runs. On
 Windows, `git` is found on `PATH` only, never in the current folder. Git's own
 safety settings, such as `safe.directory`, apply as configured.
 
