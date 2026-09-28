@@ -1,6 +1,6 @@
 # ADR 0009: A Git acquisition records a commit, not a working folder
 
-Status: Proposed. Would add occurrence version 2 and state revision version 2, and raise the storage
+Status: Accepted. Adds occurrence version 2 and state revision version 2, and raises the storage
 format to version 5.
 
 ## Context
@@ -30,18 +30,25 @@ roots are filesystem paths, and its entries carry modification times that a Git 
 - **The commit's tree, through Git's plumbing** (`ls-tree` and `cat-file`), never through
   `git archive` or a checkout. No attributes, filters, end-of-line conversion or LFS smudging are
   applied: the preserved bytes are the blob bytes.
-- **Not the working folder.** Untracked and ignored files contribute nothing, however large.
+- **Every tracked path in that tree, as committed.** Untracked and ignored files contribute nothing,
+  however large. There is no live-store exclusion: a folder walk excludes the project's own store
+  because the walk would read the store as it changes, but a commit is immutable, so a tracked path
+  under `.sulai/` is preserved like any other.
 - **A bare repository works too,** because the source is the object database.
+- **A repository with no commit yet** is refused with a result saying no commit exists. An empty
+  working folder is not a commit.
 
 ### Identity and verification
 
 - **The root records** the repository's object format (`sha1` or `sha256`), the commit ID, and the
   commit's tree ID. The repository's path is recorded as where Sulai observed it; it is not
   identity. Remote URLs are not recorded.
-- **Each captured entry records** its path, its mode (`100644` or `100755`), its blob ID, and the
-  artifact its bytes became.
-- **Each blob is verified while it is read.** Sulai computes the Git blob ID of the bytes as it
-  streams them, and refuses the acquisition if it differs from the ID the tree names.
+- **Each captured entry records** its path, its mode (`100644`, `100755` or `120000`), its blob ID,
+  and the artifact its bytes became.
+- **Each blob is verified while it is read.** Sulai streams the blob from `cat-file` into its staged
+  artifact, hashing as it goes, with no whole-blob buffering however large the blob is. It computes
+  the Git blob ID of the same bytes, and refuses the acquisition if it differs from the ID the tree
+  names.
 - **`inspect` recomputes each entry's blob ID from the preserved artifact,** which needs no
   repository.
 - **The claim stops there.** Sulai keeps no commit or tree objects, so without the repository it
@@ -51,18 +58,37 @@ roots are filesystem paths, and its entries carry modification times that a Git 
 ### Special tree entries
 
 - **Regular and executable blobs** are captured, and their mode is kept.
-- **Symbolic links** (`120000`) are excluded with reason `symbolic-link`: recorded, never followed,
-  not preserved.
+- **Symbolic links** (`120000`) are captured as what the tree holds: a blob whose bytes are the link
+  target. The entry keeps mode `120000`, and the link is never dereferenced or followed. A folder
+  walk skips links because following one would read outside the root; a Git link's target is only
+  bytes in the commit.
 - **Submodules** (gitlinks, `160000`) are excluded with reason `submodule`, recording the commit ID
-  they name. Sulai never descends into another repository.
+  they name. They name another repository's commit, not bytes in this one, and Sulai never descends
+  into another repository.
 - **LFS pointer files** are ordinary blobs and are preserved as pointers. Sulai never fetches LFS
   content; that would be a separate acquisition.
 - **A path that is not valid UTF-8** is skipped with reason `non-utf8-name`, as for folders.
-- **A tracked path inside the project's own store** is excluded with reason `project-store`, as for
-  folders.
 
-A symbolic link found in a folder walk is recorded as skipped. In a Git tree it is excluded instead:
-the tree states exactly what the entry is, and nothing about it was unreadable.
+### How Git is run
+
+Git acquisition must keep the promise that the CLI sends nothing over the network and changes nothing
+it reads. So Sulai never relies on the user's configuration for these, and sets them explicitly:
+
+- **No network.** Lazy fetching is disabled (`--no-lazy-fetch`, `GIT_NO_LAZY_FETCH=1`). In a partial
+  clone, an object that is not present locally makes the acquisition fail with a clear message; Sulai
+  never contacts a remote to get it.
+- **No replacement objects.** Replacement refs are ignored (`--no-replace-objects`,
+  `GIT_NO_REPLACE_OBJECTS=1`), so the bytes read are the objects the commit actually names.
+- **No writes.** Optional locks are disabled (`--no-optional-locks`, `GIT_OPTIONAL_LOCKS=0`), so
+  checking the working tree does not refresh the index.
+- **No external programs.** `core.fsmonitor` is off, there is no pager, and only plumbing and status
+  commands run, so no hook, filter or textconv program runs.
+- **Explicit flags.** The status check passes its own flags (`--porcelain=v1 -z
+--untracked-files=all --ignore-submodules=none`) rather than taking them from configuration.
+- **Git's own safety settings stay.** Sulai does not override `safe.directory` or similar.
+
+Sulai checks that the `git` it finds supports these switches, and refuses Git acquisition if it does
+not.
 
 ### Uncommitted work
 
@@ -74,17 +100,22 @@ tracked files, or untracked files that are not ignored.
 - **The root records `worktree`:** `clean`, `differs` (captured anyway), or `absent` (a bare
   repository).
 
-The likely caller is an agent that has just changed files. Capturing HEAD while that work sits
-uncommitted, and reporting success, would misstate what the project holds.
-
-Sulai runs Git read-only: plumbing commands only, with `core.fsmonitor` off, no pager, no hooks and
-no filters. It does not override Git's own safety settings, such as `safe.directory`.
+The record is truthful either way: it names the commit, and says whether the working tree matched
+it. Refusing by default is a fail-safe for the caller, most likely an agent that has just changed
+files and could mistake the committed evidence for its current work. It is a policy of the command,
+not part of what a Git acquisition means, so real use can change the default without changing the
+format.
 
 ### Mixed roots
 
 One occurrence can mix Git roots and folder roots, numbered `r1`, `r2` and so on in order, as now. A
-Git root is refused if a folder root lies inside or contains its working folder, or if another Git
-root names the same repository, so every input still belongs to exactly one root.
+Git root is refused if a folder root lies inside or contains its working folder, so every input
+still belongs to exactly one root.
+
+Two Git roots may name the same repository. At different commits they are two coherent pieces of
+evidence, and the format allows it. The first command captures only HEAD, so it refuses the
+accidental duplicate of one repository at one commit twice; that is a check of the command, not a
+rule of the format.
 
 ### Citations do not change
 
@@ -100,9 +131,23 @@ check of ADR 0008 applies unchanged.
 - **State revision version 2,** identical to version 1 except that its occurrence and its parent may
   be of either version. New revisions are written as version 2; version 1 revisions stay valid.
 - **Storage format 5.** A version 4 build must not half-read a store holding records it cannot
-  parse, so the marker changes. A version 5 build refuses a version 4 store with a message naming
-  `sulai upgrade`, which verifies the store as it is and then replaces the marker. Nothing else
-  changes, because every version 4 record is a valid version 5 record. Versions 1 to 3 stay refused.
+  parse, so the marker changes. Versions 1 to 3 stay refused.
+
+### Upgrading a version 4 store
+
+A version 5 build refuses a version 4 store with a message naming `sulai upgrade`. Upgrading is the
+one deliberate mutation of stored metadata, and it touches only the marker:
+
+- **Verify first.** The whole store is verified as version 4, exactly as `inspect` would. If
+  anything fails, the upgrade stops and the store is left as it was.
+- **Then switch the marker atomically.** The version 5 marker is staged in `tmp/`, synced, and
+  renamed over `project.json`. An interrupted upgrade leaves either the valid version 4 marker or
+  the valid version 5 marker, never a partial one.
+- **Nothing else is touched.** Every version 4 record is a valid version 5 record, so no artifact,
+  occurrence or state is rewritten.
+
+`project.json` is the only stored file that is ever replaced, and only by this command. Everything
+else keeps the never-replace rule.
 
 ### Not decided here
 
@@ -114,7 +159,7 @@ them.
 
 An agent can capture a Git project without preparing an export, and the record says which commit it
 read. Filesystem acquisition is unchanged and needs nothing new. Git acquisition needs a `git`
-executable.
+executable that supports the switches above.
 
 The store gains a second version of occurrences and of state revisions, and the code that reads them
 grows to match.
@@ -128,12 +173,21 @@ The implementation is accepted when its tests show that:
   acquisition is refused, and it records `differs` only when asked to capture anyway;
 - two acquisitions of one commit share every artifact and are two occurrences;
 - the commit, the tree and the object format are recorded, and executable mode is kept;
-- symbolic links are not followed and submodules are not entered. An LFS pointer stays a pointer;
+- a symbolic link is preserved as a `120000` blob of its target and never followed;
+- a submodule is excluded with the commit it names, and not entered;
+- a tracked path under `.sulai/` is preserved;
+- an LFS pointer stays a pointer;
 - `export-ignore` and `export-subst` do not change what is captured;
+- a replacement ref does not change what is captured;
+- a partial clone missing an object refuses without any network access;
+- checking the working tree leaves the index untouched;
+- a repository with no commit is refused with a clear result;
+- a large blob is streamed with bounded memory;
 - a bare repository can be captured;
 - `inspect` recomputes every blob ID from the preserved bytes;
 - a state citation into a Git root resolves exactly as one into a folder;
-- a version 4 store is refused until upgraded, and upgrading changes only the marker.
+- a version 4 store is refused until upgraded, and upgrading changes only the marker;
+- a corrupt version 4 store refuses the upgrade and keeps its version 4 marker.
 
 ## Alternatives considered
 
@@ -146,8 +200,13 @@ record a folder that never existed for the user, and lose the commit.
 **Git-only occurrences, kept apart from folder occurrences.** Rejected: one acquisition may need a
 repository and a folder of research together.
 
-**Reading Git objects directly, without the `git` executable.** Deferred: it means parsing packfiles
-and deltas, and Git is present wherever there is a repository.
+**Excluding Git symbolic links, as a folder walk skips them.** Rejected: a Git link is a blob in the
+commit, and preserving its bytes follows nothing, so excluding it would leave a hole in the commit
+for no safety gain.
+
+**Reading Git objects directly, without the `git` executable.** Deferred: it means parsing loose
+objects, packfiles, deltas, alternates and partial clones, and Git is present wherever there is a
+repository.
 
 **Keeping commit and tree objects for a standalone proof.** Deferred until someone needs to verify a
 capture without the repository.
