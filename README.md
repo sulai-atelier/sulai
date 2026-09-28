@@ -26,6 +26,8 @@ What works:
 - a record of each acquisition: what was read, what each input became, and what
   could not be captured and why
 - several files or directories imported as one acquisition, without following links
+- a Git repository's committed files, read from the commit at HEAD rather than the
+  working folder, with the commit recorded
 - versioned state pages, each citation resolved to exact preserved bytes or
   recorded as unresolved
 - `status`, `why` and `diff` over those pages
@@ -38,7 +40,8 @@ Not built yet:
 - integrations with AI providers or tools, beyond one experimental reader
 - sync, hosting, or collaboration
 
-Everything runs locally. The CLI sends nothing over the network.
+Everything runs locally. The CLI sends nothing over the network, and Git capture
+never fetches.
 
 ## Quick start
 
@@ -81,6 +84,14 @@ and exit with status 1 on failure; an import that could not capture every input
 still records what it did and exits with status 3. `npm run cli -- --help` lists
 every command.
 
+To capture a Git repository's committed files rather than a folder, name it with
+`--git`. This reads the commit the clone has checked out, not its working folder,
+and refuses while the working tree differs from that commit:
+
+```sh
+npm run cli -- import .tmp/example --git .
+```
+
 ## How it works
 
 Sulai keeps three kinds of record, each identified by the SHA-256 of its bytes and
@@ -120,6 +131,7 @@ The [project principles](docs/principles.md) define these in full.
   its file changed above the cited lines. Recording refuses that for citations kept
   from the previous revision, but correcting them is still manual.
 - A citation that resolves shows what a line points at, not that the line is right.
+- Git capture reads the commit at HEAD only, and needs git 2.44 or later.
 - People and agents write state pages; Sulai records and checks them.
 
 ## Documentation

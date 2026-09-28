@@ -4,26 +4,67 @@
  */
 import { readdir } from 'node:fs/promises';
 import { parseOccurrenceId, parseStateId, ValidationError } from '@sulai/core';
-import type { ArtifactId } from '@sulai/core';
+import type { ArtifactId, GitObjectFormat, Occurrence } from '@sulai/core';
+import { blobIdOf } from './git.js';
 import {
   assertStoredArtifacts,
+  readOccurrenceFile,
   readStoredOccurrence,
-  storedOccurrenceId,
   summarizeOccurrence,
 } from './occurrences.js';
 import { PROJECT_FORMAT, PROJECT_VERSION, loadProject } from './project.js';
+import type { Project } from './project.js';
 import { readAllStates, summarizeState, verifyState } from './state.js';
-import { hasCode, storedArtifactId, verifyStoredArtifact } from './store.js';
+import {
+  artifactPath,
+  hasCode,
+  storedArtifactId,
+  verifyStoredArtifact,
+} from './store.js';
 
 /**
- * Generic integrity check. Verifies every stored artifact against its own
- * identity without interpreting any of them, and without loading any of them
- * into memory. Then verifies every occurrence record the same way, parses it
- * strictly, and checks that every artifact it names is stored at the size it
- * records. Last, it proves every state revision down to the bytes it cites.
+ * Recomputes the blob ID of every Git entry from its preserved bytes, which
+ * needs no repository. `known` carries blob IDs already computed, so each
+ * artifact is read once per object format.
  */
-export async function inspectProject(directory: string) {
-  const project = await loadProject(directory);
+async function assertGitBlobs(
+  project: Project,
+  occurrence: Occurrence,
+  known: Map<string, string>,
+): Promise<void> {
+  const formats = new Map<string, GitObjectFormat>();
+  for (const root of occurrence.roots) {
+    if (root.source === 'git') formats.set(root.id, root.objectFormat);
+  }
+  for (const entry of occurrence.entries) {
+    if (!('blob' in entry)) continue;
+    const format = formats.get(entry.root) as GitObjectFormat;
+    const key = `${format} ${entry.artifact}`;
+    let blob = known.get(key);
+    if (blob === undefined) {
+      blob = await blobIdOf(
+        artifactPath(project.artifacts, entry.artifact),
+        format,
+      );
+      known.set(key, blob);
+    }
+    if (blob !== entry.blob) {
+      throw new ValidationError(
+        `Occurrence records blob ${entry.blob} at ${entry.root}/${entry.path}, but its bytes are blob ${blob}`,
+      );
+    }
+  }
+}
+
+/**
+ * Generic integrity check of an opened store. Verifies every stored artifact
+ * against its own identity without interpreting any of them, and without
+ * loading any of them into memory. Then verifies every occurrence record the
+ * same way, parses it strictly, checks that every artifact it names is stored
+ * at the size it records, and recomputes every Git blob ID. Last, it proves
+ * every state revision down to the bytes it cites.
+ */
+export async function verifyProject(project: Project) {
   const filenames = (await readdir(project.artifacts)).sort();
   const artifacts = [];
   for (const filename of filenames) {
@@ -34,11 +75,15 @@ export async function inspectProject(directory: string) {
   const stored = new Map(
     artifacts.map((artifact) => [artifact.id, artifact.byteLength]),
   );
+  const blobs = new Map<string, string>();
   const occurrences = [];
   for (const filename of (await readdir(project.occurrences)).sort()) {
-    const id = storedOccurrenceId(filename);
-    const occurrence = await readStoredOccurrence(project.occurrences, id);
+    const { id, occurrence } = await readOccurrenceFile(
+      project.occurrences,
+      filename,
+    );
     assertStoredArtifacts(occurrence, stored);
+    await assertGitBlobs(project, occurrence, blobs);
     occurrences.push(summarizeOccurrence(id, occurrence));
   }
   occurrences.sort((a, b) =>
@@ -52,12 +97,16 @@ export async function inspectProject(directory: string) {
     await verifyState(project, id, revision, revisions);
     states.push(summarizeState(id, revision));
   }
+  return { artifacts, occurrences, states };
+}
+
+/** Verifies the whole project; see `verifyProject`. */
+export async function inspectProject(directory: string) {
+  const project = await loadProject(directory);
   return {
     format: PROJECT_FORMAT,
     version: PROJECT_VERSION,
-    artifacts,
-    occurrences,
-    states,
+    ...(await verifyProject(project)),
   };
 }
 
@@ -68,7 +117,7 @@ export async function inspectArtifact(directory: string, value: unknown) {
 
 /**
  * One occurrence in full, after verifying the record and, by streaming hash,
- * every artifact it names.
+ * every artifact it names, and recomputing every Git blob ID.
  */
 export async function inspectOccurrence(directory: string, value: unknown) {
   const project = await loadProject(directory);
@@ -89,6 +138,7 @@ export async function inspectOccurrence(directory: string, value: unknown) {
     }
   }
   assertStoredArtifacts(occurrence, stored);
+  await assertGitBlobs(project, occurrence, new Map());
   return { id, ...occurrence };
 }
 

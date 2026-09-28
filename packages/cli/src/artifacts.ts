@@ -6,6 +6,7 @@ import { lstat } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { Artifact, parseArtifactId, ValidationError } from '@sulai/core';
 import { loadProject } from './project.js';
+import type { Project } from './project.js';
 import {
   artifactPath,
   cleanupAfterFailure,
@@ -48,7 +49,15 @@ export async function readStoredArtifact(
   value: unknown,
   limit: number,
 ): Promise<Artifact> {
-  const project = await loadProject(directory);
+  return readArtifact(await loadProject(directory), value, limit);
+}
+
+/** As `readStoredArtifact`, from a store already opened. */
+export async function readArtifact(
+  project: Project,
+  value: unknown,
+  limit: number,
+): Promise<Artifact> {
   const id = parseArtifactId(value);
   const path = artifactPath(project.artifacts, id);
   const { size } = await lstat(path);

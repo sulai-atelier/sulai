@@ -13,13 +13,18 @@ import {
   interpretConversation,
   projectStatus,
   recordState,
+  upgradeProject,
 } from './index.js';
+import type { AcquisitionRoot } from './index.js';
 
 const usage = `Usage:
   sulai init <directory>
-  sulai import <directory> <path>...           preserve files or directories and
-                                               record the acquisition as one
-                                               occurrence, one root per path
+  sulai import <directory> <root>... [--allow-uncommitted]
+                                               preserve every root and record
+                                               the acquisition as one occurrence;
+                                               a root is a file or directory
+                                               path, or --git <repository> for
+                                               the commit at its HEAD
   sulai state record <directory> <page> --from <occurrence-id>
                      [--parent <state-id>] [--allow-changed-citations]
                                                record a state page, or - to read
@@ -33,6 +38,8 @@ const usage = `Usage:
                                                of the project, an artifact, an
                                                occurrence, or a state
   sulai interpret <directory> <artifact-id>    read an artifact as a conversation
+  sulai upgrade <directory>                    verify a storage format 4 project,
+                                               then mark it format 5
 
 Experimental, unstable, may be removed:
   sulai experimental claude-code-session <directory> <artifact-id>
@@ -43,6 +50,11 @@ Import preserves any bytes and records one occurrence: what it attempted, the
 exact bytes each input became, and what it could not capture and why. It reads
 only the paths given, which must not overlap; it never follows links. A partial
 acquisition still prints its record and exits with status 3.
+
+With --git, import reads the commit at the repository's HEAD through Git, not
+the working folder: every tracked file as committed, and nothing untracked or
+ignored. It never fetches. It is refused while the working tree differs from
+that commit, unless --allow-uncommitted is given.
 
 A state revision records a view of where a project stands and what it cites:
 each reference, written \`rN/path#La-Lb\` against one occurrence, is resolved to
@@ -133,7 +145,25 @@ async function main(args: string[]): Promise<void> {
     directory !== undefined &&
     args.length >= 3
   ) {
-    const imported = await importPaths(directory, args.slice(2));
+    // Roots keep the order given, so paths and --git roots number together.
+    const roots: AcquisitionRoot[] = [];
+    let allowUncommitted = false;
+    for (let index = 2; index < args.length; index += 1) {
+      const arg = args[index] as string;
+      const repository = args[index + 1];
+      if (arg === '--git' && repository !== undefined) {
+        roots.push({ git: repository });
+        index += 1;
+      } else if (arg === '--allow-uncommitted' && !allowUncommitted) {
+        allowUncommitted = true;
+      } else if (arg.startsWith('--')) {
+        throw new Error(usage.trimEnd());
+      } else {
+        roots.push(arg);
+      }
+    }
+    if (roots.length === 0) throw new Error(usage.trimEnd());
+    const imported = await importPaths(directory, roots, { allowUncommitted });
     skipped = imported.skipped.length;
     result = imported;
   } else if (command === 'state' && args[1] === 'record') {
@@ -193,6 +223,12 @@ async function main(args: string[]): Promise<void> {
     args.length === 3
   ) {
     result = await interpretConversation(directory, operand);
+  } else if (
+    command === 'upgrade' &&
+    directory !== undefined &&
+    args.length === 2
+  ) {
+    result = await upgradeProject(directory);
   } else {
     throw new Error(usage.trimEnd());
   }

@@ -1,9 +1,10 @@
 # Format specification
 
-This document defines Sulai's records and its local storage, format version 4. It
-is pre-alpha: the format may change, and projects in older versions are refused
-rather than migrated. The [architecture overview](architecture.md) explains how
-the pieces fit together. All committed fixture data is synthetic.
+This document defines Sulai's records and its local storage, format version 5. It
+is pre-alpha: the format may change. A version 4 project is upgraded with
+`sulai upgrade`; older projects are refused rather than migrated. The
+[architecture overview](architecture.md) explains how the pieces fit together. All
+committed fixture data is synthetic.
 
 ## Artifacts and source references
 
@@ -109,18 +110,28 @@ publication: publication does not validate at all.
 format marker written and validated by the CLI, not user-editable configuration:
 
 ```text
-{"format":"sulai.project","version":4}
+{"format":"sulai.project","version":5}
 ```
 
 The marker describes the **storage** format and deliberately says nothing about
 the format of the artifacts inside, because an artifact is exact bytes of any
 kind. Version 1 embedded `artifactFormat`; version 2 had no occurrence records;
-version 3 had no state revisions. All three are refused with a specific message
-before anything in the project is touched, and this pre-alpha does not migrate
-them. The marker's version is not a state revision. See
+version 3 had no state revisions; version 4 had no version 2 occurrences or state
+revisions. Versions 1 to 3 are refused with a specific message before anything in
+the project is touched, and this pre-alpha does not migrate them. The marker's
+version is not a state revision. See
 [ADR 0003](adr/0003-storage-is-independent-of-artifact-format.md),
-[ADR 0005](adr/0005-import-occurrences-record-acquisition-events.md) and
-[ADR 0007](adr/0007-state-revisions-record-a-view-and-its-evidence.md).
+[ADR 0005](adr/0005-import-occurrences-record-acquisition-events.md),
+[ADR 0007](adr/0007-state-revisions-record-a-view-and-its-evidence.md) and
+[ADR 0009](adr/0009-git-acquisition-records-a-commit.md).
+
+A version 4 project is refused with a message naming `sulai upgrade <project>`.
+Every version 4 record is a valid version 5 record, so upgrading changes only the
+marker. It first verifies the whole store as `inspect` does, and stops if anything
+fails or if the store holds a record only version 5 writes. Then it stages the
+version 5 marker in `tmp`, syncs it, and renames it over `project.json`, so an
+interruption leaves one whole marker or the other. `project.json` is the only
+stored file that is ever replaced, and only by this command.
 
 `.sulai/tmp` is ephemeral. It is recreated on demand, so its absence does not
 make a project invalid. Storage directories are created with mode `0700`, which
@@ -150,8 +161,9 @@ import also records one occurrence, described below.
 
 `inspect` verifies that every stored artifact still hashes to the name it is
 stored under, without parsing any artifact. It then verifies every occurrence the
-same way, parses it strictly, and checks that every artifact it names is stored at
-the size it records. Last it verifies every state revision, as described below.
+same way, parses it strictly, checks that every artifact it names is stored at
+the size it records, and recomputes the blob ID of every Git entry from its bytes.
+Last it verifies every state revision, as described below.
 
 `interpret` reads one artifact through one specific format. It may fail on bytes
 that were stored successfully, and that failure leaves the artifact untouched.
@@ -189,11 +201,12 @@ An occurrence is an immutable record of one acquisition event. It is separate fr
 artifact identity: the same bytes can arrive in many events, and each event is
 recorded. See [ADR 0005](adr/0005-import-occurrences-record-acquisition-events.md).
 
-`sulai import <project> <path>...` takes one or more files or directories. Each
-path is one root of a single occurrence, numbered `r1`, `r2` and so on in the order
-given. A directory is walked recursively and each regular file under it is
-preserved. A file root has a single entry with the empty path, meaning the root
-itself.
+`sulai import <project> <root>... [--allow-uncommitted]` takes one or more
+roots, each a file or directory path, or `--git <repository>` for the commit at a
+repository's HEAD. Each is one root of a single occurrence, numbered `r1`, `r2`
+and so on in the order given, whatever its kind. A directory is walked
+recursively and each regular file under it is preserved. A file root has a single
+entry with the empty path, meaning the root itself.
 
 Every root is checked before anything is captured. If a root is missing, is a link,
 is neither a file nor a directory, lies inside the project store, or overlaps
@@ -202,34 +215,90 @@ judged by real path, and directory roots also by filesystem identity. Identical
 bytes under different roots are one artifact with separate entries. See
 [ADR 0006](adr/0006-several-roots-in-one-acquisition.md).
 
+**Git roots.** A Git root reads one commit from the repository's objects, never
+from the working folder. HEAD is resolved once to the full commit ID, and every
+path in that commit's tree is read through `git ls-tree` and `git cat-file`, with
+no attributes, filters, end-of-line conversion or LFS smudging applied: the
+preserved bytes are the blob bytes. Untracked and ignored files contribute
+nothing. A tracked path under `.sulai` is preserved like any other. A symbolic
+link is preserved as the blob the tree holds, whose bytes are its target, and is
+never followed. A submodule is excluded with the commit it names, and never
+entered. An LFS pointer is preserved as the pointer. Each blob is hashed while it
+streams, and the acquisition is refused if its Git blob ID differs from the one
+the tree names. See [ADR 0009](adr/0009-git-acquisition-records-a-commit.md).
+
+The repository is named by its top-level working folder, or, when bare, by the
+repository itself; capturing part of a repository is not supported. A repository
+with no commit is refused. Git and folder roots can mix in one occurrence, but a
+folder root may not lie inside or contain a Git root's working folder, and two
+roots may not be the same commit of the same repository.
+
+Before reading, Sulai asks Git whether the working tree differs from HEAD: staged
+changes, changed tracked files, or untracked files that are not ignored. The
+project's own store does not count when it lies inside the working tree, and a
+submodule counts when a different commit is checked out in it. If anything differs,
+the acquisition is refused, naming the paths, unless `--allow-uncommitted` is
+given. The root records which it was.
+
+Git acquisition needs `git` 2.44 or later on `PATH`. Every Git command runs with
+lazy fetching, replacement objects and optional locks turned off
+(`--no-lazy-fetch`, `--no-replace-objects`, `--no-optional-locks`, and their
+environment variables), with `core.fsmonitor` off and no pager. The working-tree
+check turns off every configured filter driver and passes its own flags:
+`--porcelain=v1`, `-z`, `--untracked-files=all`, `--ignore-submodules=dirty` and
+`--no-renames`. Variables that would point Git at another repository, index,
+object store or configuration file are cleared. So nothing is fetched, nothing in the repository is
+written, and no hook, filter, textconv, pager or fsmonitor program runs. Git's own
+safety settings, such as `safe.directory`, apply as configured.
+
 The record is one line of compact JSON followed by one LF, with the fields in this
 order and no others:
 
 | Field        | Meaning                                                                      |
 | ------------ | ---------------------------------------------------------------------------- |
 | `format`     | `"sulai.occurrence"`                                                         |
-| `version`    | `1`                                                                          |
+| `version`    | `2`                                                                          |
 | `nonce`      | 32 lowercase hexadecimal characters, random per acquisition                  |
 | `startedAt`  | acquisition start, `YYYY-MM-DDTHH:MM:SS.sssZ`, the acquiring machine's clock |
 | `finishedAt` | acquisition end, same form, not before `startedAt`                           |
 | `status`     | `"partial"` exactly when `skipped` is nonempty, otherwise `"complete"`       |
-| `roots`      | nonempty; each `{id, kind, platform, locator}`                               |
-| `entries`    | captured inputs; each `{root, path, artifact, byteLength, modifiedAt, new}`  |
+| `roots`      | nonempty; each a folder root or a Git root, below                            |
+| `entries`    | captured inputs, below                                                       |
 | `skipped`    | inputs found but not captured; each `{root, path, reason}`                   |
-| `excluded`   | inputs deliberately not walked; each `{root, path, reason}`                  |
+| `excluded`   | inputs deliberately not read, below                                          |
 
-Roots are numbered `r1`, `r2` and so on, in order. `kind` is `file` or
-`directory`. `platform` is the acquiring platform, such as `linux`, `darwin` or
-`win32`. It says how to read `locator`, which is the absolute path of the root as
-observed at acquisition. The locator is history: it never enters artifact identity,
-and Sulai never opens it again.
+Roots are numbered `r1`, `r2` and so on, in order:
+
+| Root   | Fields                                                                         |
+| ------ | ------------------------------------------------------------------------------ |
+| Folder | `{id, source: "filesystem", kind, platform, locator}`                          |
+| Git    | `{id, source: "git", objectFormat, commit, tree, worktree, platform, locator}` |
+
+`kind` is `file` or `directory`. `platform` is the acquiring platform, such as
+`linux`, `darwin` or `win32`. It says how to read `locator`, which is the absolute
+path of the root, or of the repository, as observed at acquisition. The locator is
+history: it never enters artifact identity, and Sulai never opens it again.
+`objectFormat` is `sha1` or `sha256`. `commit` and `tree` are full, lowercase
+object IDs in that format. `worktree` is `clean`, `differs` when captured anyway,
+or `absent` for a bare repository.
+
+| Entry         | Fields                                                |
+| ------------- | ----------------------------------------------------- |
+| In a folder   | `{root, path, artifact, byteLength, modifiedAt, new}` |
+| In a Git root | `{root, path, artifact, byteLength, mode, blob, new}` |
 
 Paths are relative to their root and `/`-separated. They have no empty, `.` or `..`
 segments. Only a file root uses the empty path, and a file root records exactly one
 input. `artifact` is an `ArtifactId`. `byteLength` is its size. `modifiedAt` is the
-filesystem's modification time when the input was read, unverified. `new` says
-whether this acquisition added the bytes to the store, and entries with the same
-artifact agree on it.
+filesystem's modification time when the input was read, unverified. `mode` is
+`100644`, `100755`, or `120000` for a symbolic link. `blob` is the blob ID the tree
+names, verified against the bytes when they were read. Within one object format, a
+blob ID and an artifact always go together. `new` says whether this acquisition
+added the bytes to the store, and entries with the same artifact agree on it.
+
+**Version 1** records remain valid and are read as written. They are identical
+except that `version` is `1`, and every root is a folder root written without
+`source`, as `{id, kind, platform, locator}`.
 
 Skip reasons:
 
@@ -243,9 +312,13 @@ Skip reasons:
 | `non-utf8-name`       | a name that is not valid UTF-8                                      |
 
 A non-UTF-8 name is recorded through a lossy decoding, so two such names can
-coincide. That is the only case in which two records may share a path. The only
-exclusion reason is `project-store`: the project's own `.sulai` directory when it
-lies inside a root.
+coincide. That is the only case in which two records may share a path. A Git root
+skips nothing else: a commit's tree holds only blobs and submodules.
+
+| Exclusion       | Fields                         | Meaning                                                    |
+| --------------- | ------------------------------ | ---------------------------------------------------------- |
+| `project-store` | `{root, path, reason}`         | the project's own `.sulai` directory, inside a folder root |
+| `submodule`     | `{root, path, reason, commit}` | a submodule in a Git root, and the commit it names         |
 
 Entries, skipped inputs and exclusions are each sorted by root and then by the
 UTF-8 bytes of the path, without duplicates. No input is both captured and excluded,
@@ -253,9 +326,10 @@ and nothing is recorded inside an excluded directory. Every string is well-forme
 Unicode.
 
 A record is accepted only if it is byte-for-byte the canonical encoding above, so
-each record has one encoding. Its identity is `occurrence:v1:` followed by the
-SHA-256 of those bytes, and it is stored as `occurrences/<digest>.json`. In-memory
-reads of one record are limited to 64 MiB.
+each record has one encoding. Its identity is `occurrence:v2:`, or `occurrence:v1:`
+for a version 1 record, followed by the SHA-256 of those bytes. It is stored as
+`occurrences/<digest>.json` whatever its version, and the version the bytes declare
+completes the identity. In-memory reads of one record are limited to 64 MiB.
 
 Acquisition order: each input is streamed and published as an artifact first, and
 the occurrence is published last, by the same never-replace hard-link protocol. A
@@ -264,13 +338,17 @@ begun, stops the acquisition before any record is written, leaving at most
 unreferenced artifacts. An input that cannot be captured is skipped and the walk
 continues. The walk is not atomic. Inputs that appear during it may be
 missed, and `complete` means everything the walk found was captured. It never means
-a snapshot of one instant.
+a snapshot of one instant. A commit does not change, so a Git root is exact. A
+missing object, as in a partial clone, refuses the acquisition; Sulai never fetches
+it.
 
 The CLI prints `occurrenceId`, `status`, `roots`, `entryCount`, `newArtifacts`,
 `existingArtifacts`, `skipped` and `excluded`; each skipped or excluded item names
-its root. A partial acquisition exits with
+its root. Each root is `{id, source, kind, locator}`, or for a Git root
+`{id, source, locator, commit, worktree}`. A partial acquisition exits with
 status 3 and still prints its record. `sulai inspect <project> <occurrence-id>`
-prints the full record after verifying it and every artifact it names.
+prints the full record after verifying it and every artifact it names, and
+recomputing every Git blob ID.
 
 ## State revisions
 
@@ -299,7 +377,7 @@ order and no others:
 | Field        | Meaning                                                         |
 | ------------ | --------------------------------------------------------------- |
 | `format`     | `"sulai.state"`                                                 |
-| `version`    | `1`                                                             |
+| `version`    | `2`                                                             |
 | `parent`     | a state ID, or `null` for a first revision                      |
 | `createdAt`  | `YYYY-MM-DDTHH:MM:SS.sssZ`, the recording machine's clock       |
 | `page`       | the page's `ArtifactId`                                         |
@@ -320,8 +398,12 @@ endByte}`, with a half-open byte range into that artifact. An unresolved one is
 | `not-utf8-text`          | the range is not valid UTF-8                                                           |
 
 A record is accepted only if it is byte-for-byte this canonical encoding. Its
-identity is `state:v1:` followed by the SHA-256 of those bytes, and it is stored as
-`states/<digest>.json`.
+identity is `state:v2:`, or `state:v1:` for a version 1 record, followed by the
+SHA-256 of those bytes, and it is stored as `states/<digest>.json` whatever its
+version. A version 1 record is identical except that `version` is `1`, and its
+occurrence and parent may only be version 1 records; a version 2 revision may name
+either version, so a history continues across the upgrade. A citation into a Git
+root is written and resolved exactly as one into a folder.
 
 **Recording.** `sulai state record <project> <page> --from <occurrence-id>
 [--parent <state-id>]` resolves each reference once, streaming each cited artifact
@@ -343,7 +425,8 @@ refused and names each such citation and its page lines, unless
 reference counts recorded in it. It verifies every stored revision and each head's
 page against their names, and never reads the evidence the pages cite. `sulai why
 <project> <state-id> <line>` returns, for each reference on that line of the page,
-its resolution and, when resolved, the exact bytes. It first verifies the cited
+its resolution and, when resolved, the exact bytes, with where they were: the root,
+its locator, the path, and for a Git root the commit. It first verifies the cited
 artifact's hash by streaming, then reads only the range, at most 1 MiB of it per
 reference, marking a cut-off as `truncated`. `sulai diff <project> <a> <b>`
 lists the page lines removed and added, in order.

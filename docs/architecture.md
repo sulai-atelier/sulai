@@ -10,7 +10,7 @@ Sulai keeps a project's history as three kinds of immutable record. Each is
 identified by the SHA-256 of its exact bytes, and none is ever rewritten.
 
 ```text
-files you name
+files, folders or commits you name
       │ import
       ▼
   Artifact         exact bytes, stored once
@@ -27,8 +27,9 @@ files you name
   or time; those belong to occurrences.
 - **Occurrence.** One acquisition. It lists the roots that were named, numbered
   `r1`, `r2` and so on, every input found under them with the artifact it became,
-  and every input that could not be captured, with a reason. The same bytes
-  imported twice are one artifact and two occurrences.
+  and every input that could not be captured, with a reason. A root is a file, a
+  folder, or one commit read from a Git repository, recorded with its commit ID.
+  The same bytes imported twice are one artifact and two occurrences.
 - **State revision.** One view of where the project stands. The page is Markdown,
   written by a person or an agent. Each citation on it, such as
   `r1/docs/plan.md#L3-L8`, is resolved against one occurrence to an artifact and
@@ -49,6 +50,7 @@ These separations are deliberate. Most mistakes would come from blurring one.
 | citation resolution and claim support | Sulai proves that a citation points at exact bytes, never that those bytes support the line                                                |
 | project state and truth               | a state page is a recorded view, not a verdict                                                                                             |
 | acquisition and discovery             | only the paths named are read: links are never followed, and content is never searched for other paths                                     |
+| a commit and its working folder       | a Git root reads the commit's objects, never the folder, so uncommitted work is never mistaken for the commit                              |
 
 ## Storage
 
@@ -56,7 +58,7 @@ A project keeps its records under `.sulai/`:
 
 ```text
 .sulai/
-  project.json    storage format marker, version 4
+  project.json    storage format marker, version 5
   artifacts/      <sha256>.raw
   occurrences/    <sha256>.json
   states/         <sha256>.json
@@ -73,7 +75,8 @@ artifacts before the occurrence that names them, a page before the revision that
 cites it. An interrupted operation can leave unreferenced artifacts, never a
 record that names missing ones. This is not a guarantee across power loss; the
 [format specification](format.md#local-storage) states what is and is not
-promised.
+promised. The one exception to never-replace is `sulai upgrade`, which renames a
+new marker over `project.json` after verifying the whole store.
 
 ## Packages
 
@@ -94,12 +97,14 @@ Inside `packages/cli/src`:
 | `store.ts`        | streaming reads, staging, never-replace publication, verification      |
 | `project.ts`      | the `.sulai` layout, the format marker, creating and opening a project |
 | `artifacts.ts`    | storing one file; loading one artifact whole                           |
-| `acquire.ts`      | checking roots, walking them, and recording an occurrence              |
+| `acquire.ts`      | checking roots, walking or reading them, and recording an occurrence   |
+| `git.ts`          | running Git: one commit's tree and blobs, and the working-tree check   |
 | `occurrences.ts`  | reading stored occurrences and checking them against their artifacts   |
 | `references.ts`   | resolving a page's citations to byte ranges                            |
 | `state.ts`        | recording revisions; `status`, `why` and `diff`                        |
 | `inspect.ts`      | integrity checks                                                       |
 | `interpret.ts`    | reading an artifact through a format                                   |
+| `upgrade.ts`      | upgrading a storage format 4 project                                   |
 | `experimental.ts` | the experimental Claude Code command                                   |
 | `main.ts`         | argument parsing and output                                            |
 
@@ -114,6 +119,9 @@ Inside `packages/cli/src`:
 - A revision cites exactly one occurrence, so refreshing a page means acquiring
   again everything it cites.
 - Nothing locks the store, so two recordings at once can fork the history.
+- A Git root keeps each blob it read, not the commit or tree objects. Without the
+  repository, a capture can be checked blob by blob, but not shown to hold every
+  path the commit had.
 
 Removing any of these would change the format. The [roadmap](../ROADMAP.md) says
 when that is expected.

@@ -14,20 +14,28 @@ import {
 } from './store.js';
 
 export const PROJECT_FORMAT = 'sulai.project';
-export const PROJECT_VERSION = 4;
+export const PROJECT_VERSION = 5;
+
+/** The one earlier storage format that `sulai upgrade` accepts. */
+export const UPGRADABLE_VERSION = 4;
 
 /**
  * The project marker describes the Sulai storage format only. It deliberately
  * says nothing about the format of the artifacts inside, because an artifact is
  * exact bytes of any kind. Version 1 embedded `artifactFormat`; version 2 had no
- * occurrence records; version 3 had no state revisions. All are refused rather
- * than half-verified.
+ * occurrence records; version 3 had no state revisions; version 4 had no
+ * version 2 occurrences or state revisions. All are refused rather than
+ * half-verified, and only version 4 can be upgraded.
  */
-const PROJECT_FILE = Buffer.from(
-  JSON.stringify({ format: PROJECT_FORMAT, version: PROJECT_VERSION }) + '\n',
-);
+export function projectMarker(version: number): Buffer {
+  return Buffer.from(
+    JSON.stringify({ format: PROJECT_FORMAT, version }) + '\n',
+  );
+}
 
-function paths(directory: string) {
+const PROJECT_FILE = projectMarker(PROJECT_VERSION);
+
+export function paths(directory: string) {
   const root = resolve(directory);
   const store = join(root, '.sulai');
   return {
@@ -41,7 +49,7 @@ function paths(directory: string) {
   };
 }
 
-function describeUnsupportedMarker(bytes: Buffer): string {
+export function describeUnsupportedMarker(bytes: Buffer): string {
   try {
     const parsed: unknown = JSON.parse(bytes.toString('utf8'));
     if (
@@ -50,8 +58,12 @@ function describeUnsupportedMarker(bytes: Buffer): string {
       (parsed as { format?: unknown }).format === PROJECT_FORMAT
     ) {
       const version = (parsed as { version?: unknown }).version;
+      const found = `Project uses storage format version ${String(version)}; this build requires version ${PROJECT_VERSION}.`;
+      if (bytes.equals(projectMarker(UPGRADABLE_VERSION))) {
+        return `${found} Upgrade it with \`sulai upgrade\`, which changes only the format marker.`;
+      }
       if (version !== PROJECT_VERSION) {
-        return `Project uses storage format version ${String(version)}; this build requires version ${PROJECT_VERSION}. Pre-alpha does not migrate projects.`;
+        return `${found} Only version ${UPGRADABLE_VERSION} can be upgraded.`;
       }
     }
   } catch {
