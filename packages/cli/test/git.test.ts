@@ -47,7 +47,7 @@ Object.assign(process.env, {
 after(() => rmSync(isolated, { recursive: true, force: true }));
 
 const supported = spawnSync('git', ['--no-lazy-fetch', 'version']).status === 0;
-const skip = supported ? false : 'needs git 2.44 or later';
+const skip = supported ? false : 'needs git 2.45 or later';
 
 function git(cwd: string, ...args: string[]): string {
   return execFileSync('git', ['-C', cwd, ...args], {
@@ -130,6 +130,10 @@ async function storedArtifacts(directory: string) {
 
 const long_ago = new Date('2001-01-01T00:00:00Z');
 
+/** What the first root of an acquisition says about its working tree. */
+const worktree = (result: Awaited<ReturnType<typeof importPaths>>) =>
+  result.roots[0]?.source === 'git' ? result.roots[0].worktree : undefined;
+
 test(
   'a git that cannot refuse to fetch is refused',
   { skip: supported && 'this git can refuse to fetch' },
@@ -137,7 +141,7 @@ test(
     const { base, directory } = await setup(t);
     await assert.rejects(
       importPaths(directory, [{ git: base }]),
-      /needs git 2\.44 or later/,
+      /needs git 2\.45 or later/,
     );
   },
 );
@@ -426,12 +430,117 @@ test(
       record.entries.map((entry) => entry.path),
       ['.sulai/notes.md', 'a.txt'],
     );
-    // Anything else untracked still counts.
-    await writeFile(join(repo, 'new.txt'), 'new\n');
+    // Anything else untracked still counts, and an untracked folder is named
+    // whole rather than file by file.
+    await tree(repo, { 'new/a.txt': 'a\n', 'new/b.txt': 'b\n' });
     await assert.rejects(
       importPaths(repo, [{ git: repo }]),
-      /in 1 path\(s\): new\.txt\./,
+      /in 1 path\(s\): new\/\./,
     );
+  },
+);
+
+test(
+  'an untracked store in the working tree is passed over whole, however much it holds',
+  { skip },
+  async (t) => {
+    const { base } = await setup(t);
+    const repo = await repository(base, { 'a.txt': 'a\n', 'b.txt': 'b\n' });
+    await initializeProject(repo);
+    for (let index = 0; index < 3; index += 1) {
+      const result = await importPaths(repo, [{ git: repo }]);
+      assert.equal(worktree(result), 'clean');
+    }
+    // Git names the store as one folder, not as the records it holds.
+    assert.equal(
+      git(repo, 'status', '--porcelain=v1', '--untracked-files=normal'),
+      '?? .sulai/',
+    );
+  },
+);
+
+test(
+  'a filter that transforms files is not run, so a stale file counts as changed',
+  { skip },
+  async (t) => {
+    const { base, directory } = await setup(t);
+    git(base, 'init', '-q', 'repo');
+    const repo = join(base, 'repo');
+    // The commit holds lowercase text; the working copy is what the filter
+    // makes of it.
+    git(repo, 'config', 'filter.upper.clean', 'tr A-Z a-z');
+    git(repo, 'config', 'filter.upper.smudge', 'tr a-z A-Z');
+    await tree(repo, {
+      '.gitattributes': '*.txt filter=upper\n',
+      'note.txt': 'HELLO\n',
+    });
+    git(repo, 'add', '-A');
+    git(repo, 'commit', '-q', '-m', 'filtered');
+    assert.equal(git(repo, 'cat-file', '-p', 'HEAD:note.txt'), 'hello');
+    // With fresh cached details nothing is rehashed, and the check agrees
+    // with Git.
+    await utimes(join(repo, 'note.txt'), long_ago, long_ago);
+    git(repo, 'update-index', '-q', '--refresh');
+    assert.equal(
+      worktree(await importPaths(directory, [{ git: repo }])),
+      'clean',
+    );
+    // With stale ones the file is rehashed as it is, with no filter, so it
+    // differs from the commit.
+    const later = new Date('2002-01-01T00:00:00Z');
+    await utimes(join(repo, 'note.txt'), later, later);
+    await assert.rejects(
+      importPaths(directory, [{ git: repo }]),
+      /in 1 path\(s\): note\.txt\./,
+    );
+    const anyway = await importPaths(directory, [{ git: repo }], {
+      allowUncommitted: true,
+    });
+    assert.equal(worktree(anyway), 'differs');
+    const record = await inspectOccurrence(directory, anyway.occurrenceId);
+    const note = record.entries.find((entry) => entry.path === 'note.txt');
+    assert.equal(note?.artifact, sha('hello\n'));
+    // Git, which runs the filter, calls the same working tree clean.
+    assert.equal(git(repo, 'status', '--porcelain'), '');
+  },
+);
+
+test(
+  'no trace output is written, whether the environment or the configuration asks for it',
+  { skip },
+  async (t) => {
+    const { base, directory } = await setup(t);
+    const repo = await repository(base, { 'a.txt': 'a\n' });
+    const traces = join(base, 'traces');
+    await mkdir(traces);
+    const target = (name: string) => join(traces, name).split(sep).join('/');
+    const configuration = join(isolated, 'gitconfig');
+    const traceConfiguration = `[trace2]\n\tnormalTarget = ${target('config-normal')}\n\teventTarget = ${target('config-event')}\n\tperfTarget = ${target('config-perf')}\n`;
+    const variables = {
+      GIT_TRACE: target('trace'),
+      GIT_TRACE_PERFORMANCE: target('performance'),
+      GIT_TRACE2: target('trace2'),
+      GIT_TRACE2_EVENT: target('trace2-event'),
+      GIT_REDIRECT_STDERR: target('stderr'),
+    };
+    await writeFile(configuration, traceConfiguration);
+    Object.assign(process.env, variables);
+    try {
+      await importPaths(directory, [{ git: repo }]);
+    } finally {
+      for (const name of Object.keys(variables)) delete process.env[name];
+      await writeFile(configuration, '');
+    }
+    assert.deepEqual(await readdir(traces), []);
+    // The same configuration makes an ordinary git write, so the check above
+    // can fail.
+    await writeFile(configuration, traceConfiguration);
+    try {
+      git(repo, 'rev-parse', 'HEAD');
+    } finally {
+      await writeFile(configuration, '');
+    }
+    assert.notDeepEqual(await readdir(traces), []);
   },
 );
 

@@ -238,18 +238,26 @@ changes, changed tracked files, or untracked files that are not ignored. The
 project's own store does not count when it lies inside the working tree, and a
 submodule counts when a different commit is checked out in it. If anything differs,
 the acquisition is refused, naming the paths, unless `--allow-uncommitted` is
-given. The root records which it was.
+given. An untracked folder is named whole. The root records what the check found.
 
-Git acquisition needs `git` 2.44 or later on `PATH`. Every Git command runs with
+The check runs no filter program. So a file whose working copy a filter
+transforms, such as one Git LFS has smudged, counts as differing once its cached
+details are stale, where `git status`, which runs the filter, would call it clean.
+`worktree` is the result of Sulai's own check, not Git's verdict.
+
+Git acquisition needs `git` 2.45 or later on `PATH`. Every Git command runs with
 lazy fetching, replacement objects and optional locks turned off
 (`--no-lazy-fetch`, `--no-replace-objects`, `--no-optional-locks`, and their
 environment variables), with `core.fsmonitor` off and no pager. The working-tree
 check turns off every configured filter driver and passes its own flags:
-`--porcelain=v1`, `-z`, `--untracked-files=all`, `--ignore-submodules=dirty` and
-`--no-renames`. Variables that would point Git at another repository, index,
-object store or configuration file are cleared. So nothing is fetched, nothing in the repository is
-written, and no hook, filter, textconv, pager or fsmonitor program runs. Git's own
-safety settings, such as `safe.directory`, apply as configured.
+`--porcelain=v1`, `-z`, `--untracked-files=normal`, `--ignore-submodules=dirty`
+and `--no-renames`. Variables that would point Git at another repository, index,
+object store or configuration file are cleared. Trace output is off: inherited
+`GIT_TRACE*` and `GIT_REDIRECT_*` variables are removed, and `GIT_TRACE2`,
+`GIT_TRACE2_EVENT` and `GIT_TRACE2_PERF` are set to `0`, which overrides a
+Trace2 target in system or global configuration. So nothing is fetched, nothing
+is written, and no hook, filter, textconv, pager or fsmonitor program runs. Git's
+own safety settings, such as `safe.directory`, apply as configured.
 
 The record is one line of compact JSON followed by one LF, with the fields in this
 order and no others:
@@ -279,8 +287,8 @@ Roots are numbered `r1`, `r2` and so on, in order:
 path of the root, or of the repository, as observed at acquisition. The locator is
 history: it never enters artifact identity, and Sulai never opens it again.
 `objectFormat` is `sha1` or `sha256`. `commit` and `tree` are full, lowercase
-object IDs in that format. `worktree` is `clean`, `differs` when captured anyway,
-or `absent` for a bare repository.
+object IDs in that format. `worktree` is what the working-tree check found:
+`clean`, `differs` when captured anyway, or `absent` for a bare repository.
 
 | Entry         | Fields                                                |
 | ------------- | ----------------------------------------------------- |

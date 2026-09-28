@@ -1,7 +1,9 @@
 # ADR 0005: Import occurrences record acquisition events
 
 Status: Accepted. The CLI now fills several roots per acquisition; see
-[ADR 0006](0006-several-roots-in-one-acquisition.md).
+[ADR 0006](0006-several-roots-in-one-acquisition.md). Keeping every source's concepts out of the
+record is narrowed by [ADR 0009](0009-git-acquisition-records-a-commit.md): artifacts stay
+source-neutral, but a Git root records Git's own identifiers.
 
 ## Context
 

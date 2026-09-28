@@ -44,10 +44,21 @@ const REDIRECTING_VARIABLES = new Set([
   'GIT_WORK_TREE',
 ]);
 
+/**
+ * Git can write trace output to any file or socket. Inherited trace and, on
+ * Windows, output-redirecting variables are removed. Trace2 can also be sent
+ * somewhere by system or global configuration, which `-c` does not override
+ * because Git reads it first; its own variables set to 0 do.
+ */
+const WRITING_PREFIXES = ['GIT_TRACE', 'GIT_REDIRECT_'];
+
 function environment(): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const [name, value] of Object.entries(process.env)) {
-    if (!REDIRECTING_VARIABLES.has(name.toUpperCase())) env[name] = value;
+    const upper = name.toUpperCase();
+    if (REDIRECTING_VARIABLES.has(upper)) continue;
+    if (WRITING_PREFIXES.some((prefix) => upper.startsWith(prefix))) continue;
+    env[name] = value;
   }
   return {
     ...env,
@@ -55,6 +66,9 @@ function environment(): NodeJS.ProcessEnv {
     GIT_NO_REPLACE_OBJECTS: '1',
     GIT_OPTIONAL_LOCKS: '0',
     GIT_TERMINAL_PROMPT: '0',
+    GIT_TRACE2: '0',
+    GIT_TRACE2_EVENT: '0',
+    GIT_TRACE2_PERF: '0',
   };
 }
 
@@ -93,10 +107,20 @@ interface Result {
   readonly stdout: Buffer;
 }
 
+interface RunOptions {
+  /** Exit statuses that are answers rather than failures. */
+  readonly allowed?: readonly number[];
+  /** What to say when the output passes the bound on what is held. */
+  readonly tooLarge?: string;
+}
+
 function execute(
   program: string,
   args: readonly string[],
-  allowed: readonly number[],
+  {
+    allowed = [0],
+    tooLarge = `git printed more than ${MAX_OCCURRENCE_BYTES} bytes`,
+  }: RunOptions = {},
 ): Promise<Result> {
   return new Promise((resolvePromise, reject) => {
     execFile(
@@ -115,11 +139,7 @@ function execute(
           return;
         }
         if (error?.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') {
-          reject(
-            new ValidationError(
-              'The commit is too large to record as one occurrence',
-            ),
-          );
+          reject(new ValidationError(tooLarge));
           return;
         }
         const detail = stderr.toString('utf8').trim() || error?.message;
@@ -139,13 +159,13 @@ function git(): Promise<string> {
   checked ??= (async () => {
     const program = await findGit();
     try {
-      await execute(program, ['version'], [0]);
+      await execute(program, ['version']);
     } catch (error) {
       checked = undefined;
       throw new ValidationError(
         hasCode(error instanceof Error ? error.cause : null, 'ENOENT')
           ? 'Git acquisition needs git on PATH'
-          : 'Git acquisition needs git 2.44 or later, which can refuse to fetch missing objects',
+          : 'Git acquisition needs git 2.45 or later, which can refuse to fetch missing objects',
         { cause: error },
       );
     }
@@ -156,9 +176,9 @@ function git(): Promise<string> {
 
 async function run(
   args: readonly string[],
-  allowed: readonly number[] = [0],
+  options?: RunOptions,
 ): Promise<Result> {
-  return execute(await git(), args, allowed);
+  return execute(await git(), args, options);
 }
 
 const lines = (bytes: Buffer) => bytes.toString('utf8').trimEnd().split('\n');
@@ -188,7 +208,7 @@ export interface GitCommit {
 async function head(folder: string): Promise<string | null> {
   const { code, stdout } = await run(
     ['-C', folder, 'rev-parse', '--verify', '--quiet', 'HEAD^{commit}'],
-    [0, 1],
+    { allowed: [0, 1] },
   );
   return code === 0 ? (lines(stdout)[0] as string) : null;
 }
@@ -283,7 +303,7 @@ async function withoutFilters(folder: string): Promise<string[]> {
       '--get-regexp',
       '^filter\\.',
     ],
-    [0, 1],
+    { allowed: [0, 1] },
   );
   const drivers = new Set(
     stdout
@@ -309,26 +329,35 @@ async function withoutFilters(folder: string): Promise<string[]> {
 
 /**
  * The paths where the working tree differs from HEAD: staged changes, changed
- * tracked files, and untracked files that are not ignored. Untracked files
- * under `ignoreUntracked` are left out; that is the project's own store, when
- * it lies inside the working tree. A submodule counts when it has a different
- * commit checked out; its own files are another repository's, and not read.
+ * tracked files, and untracked files that are not ignored. An untracked folder
+ * is reported whole, not file by file, so Git never lists everything in one.
+ * Untracked paths under `ignoreUntracked` are left out; that is the project's
+ * own store, when it lies inside the working tree. A submodule counts when it
+ * has a different commit checked out; its own files are another repository's,
+ * and not read.
+ *
+ * No filter runs, so a file whose working copy a filter transforms, such as one
+ * Git LFS has smudged, counts as changed once its cached details are stale,
+ * where Git would run the filter and call it clean.
  */
 export async function worktreeChanges(
   commit: GitCommit,
   ignoreUntracked: string | null,
 ): Promise<string[]> {
-  const { stdout } = await run([
-    ...(await withoutFilters(commit.folder)),
-    '-C',
-    commit.folder,
-    'status',
-    '--porcelain=v1',
-    '-z',
-    '--untracked-files=all',
-    '--ignore-submodules=dirty',
-    '--no-renames',
-  ]);
+  const { stdout } = await run(
+    [
+      ...(await withoutFilters(commit.folder)),
+      '-C',
+      commit.folder,
+      'status',
+      '--porcelain=v1',
+      '-z',
+      '--untracked-files=normal',
+      '--ignore-submodules=dirty',
+      '--no-renames',
+    ],
+    { tooLarge: 'The working tree has more changes than Sulai can list' },
+  );
   const fields = stdout.toString('utf8').split('\0');
   const changed: string[] = [];
   for (let index = 0; index < fields.length; index += 1) {
@@ -362,15 +391,10 @@ export interface TreeItem {
 
 /** Every path in the commit's tree, submodules included but not entered. */
 export async function listTree(commit: GitCommit): Promise<TreeItem[]> {
-  const { stdout } = await run([
-    '-C',
-    commit.folder,
-    'ls-tree',
-    '-r',
-    '-z',
-    '--full-tree',
-    commit.tree,
-  ]);
+  const { stdout } = await run(
+    ['-C', commit.folder, 'ls-tree', '-r', '-z', '--full-tree', commit.tree],
+    { tooLarge: 'The commit is too large to record as one occurrence' },
+  );
   const items: TreeItem[] = [];
   for (let start = 0; start < stdout.length;) {
     const end = stdout.indexOf(0, start);
