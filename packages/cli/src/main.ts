@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { MAX_STATE_PAGE_BYTES } from '@sulai/core';
 import { readClaudeCodeSessionArtifact } from './experimental.js';
 import {
   diffStates,
@@ -19,9 +20,11 @@ const usage = `Usage:
   sulai import <directory> <path>...           preserve files or directories and
                                                record the acquisition as one
                                                occurrence, one root per path
-  sulai state record <directory> <page> --from <occurrence-id> [--parent <state-id>]
-                                               record a state page and exactly
-                                               what evidence it cites
+  sulai state record <directory> <page> --from <occurrence-id>
+                     [--parent <state-id>] [--allow-changed-citations]
+                                               record a state page, or - to read
+                                               it from standard input, and
+                                               exactly what evidence it cites
   sulai status <directory>                     the current state, one page per head
   sulai why <directory> <state-id> <line>      the preserved evidence behind one
                                                line of a state page
@@ -44,6 +47,9 @@ acquisition still prints its record and exits with status 3.
 A state revision records a view of where a project stands and what it cites:
 each reference, written \`rN/path#La-Lb\` against one occurrence, is resolved to
 exact bytes or recorded as unresolved. Sulai checks the pointer, never the claim.
+A citation kept from the parent revision must still cite the same text; if its
+file changed so that it no longer does, recording is refused unless
+--allow-changed-citations is given.
 
 Interpretation is a separate step, so material that no current reader
 understands is still stored faithfully and can be re-derived later. The only
@@ -53,14 +59,26 @@ stable interpreter today is the synthetic sulai.conversation.v1 format.
 /** Exit status for an acquisition that recorded inputs it could not capture. */
 const PARTIAL_ACQUISITION = 3;
 
-/** Splits `--name value` options from positional arguments. */
-function options(args: string[], allowed: readonly string[]) {
+/**
+ * Splits `--name value` options and `--flag` switches from positional
+ * arguments. A lone `-` is positional: it names standard input.
+ */
+function options(
+  args: string[],
+  allowed: readonly string[],
+  switches: readonly string[] = [],
+) {
   const positional: string[] = [];
   const named = new Map<string, string>();
+  const set = new Set<string>();
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index] as string;
     if (arg.startsWith('--')) {
       const name = arg.slice(2);
+      if (switches.includes(name) && !set.has(name)) {
+        set.add(name);
+        continue;
+      }
       const value = args[index + 1];
       if (!allowed.includes(name) || value === undefined || named.has(name)) {
         throw new Error(usage.trimEnd());
@@ -71,7 +89,21 @@ function options(args: string[], allowed: readonly string[]) {
       positional.push(arg);
     }
   }
-  return { positional, named };
+  return { positional, named, switches: set };
+}
+
+/** Reads standard input, refusing more than `limit` bytes. */
+async function readStandardInput(limit: number): Promise<Uint8Array> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of process.stdin as AsyncIterable<Buffer>) {
+    size += chunk.byteLength;
+    if (size > limit) {
+      throw new Error(`A state page must contain at most ${limit} bytes`);
+    }
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks);
 }
 
 async function main(args: string[]): Promise<void> {
@@ -105,16 +137,22 @@ async function main(args: string[]): Promise<void> {
     skipped = imported.skipped.length;
     result = imported;
   } else if (command === 'state' && args[1] === 'record') {
-    const { positional, named } = options(args.slice(2), ['from', 'parent']);
+    const { positional, named, switches } = options(
+      args.slice(2),
+      ['from', 'parent'],
+      ['allow-changed-citations'],
+    );
     const from = named.get('from');
     if (positional.length !== 2 || from === undefined) {
       throw new Error(usage.trimEnd());
     }
+    const page = positional[1] as string;
     result = await recordState(
       positional[0] as string,
-      positional[1] as string,
+      page === '-' ? await readStandardInput(MAX_STATE_PAGE_BYTES) : page,
       from,
       named.get('parent'),
+      { allowChangedCitations: switches.has('allow-changed-citations') },
     );
   } else if (
     command === 'status' &&

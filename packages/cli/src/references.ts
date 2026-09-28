@@ -253,3 +253,58 @@ export async function resolveReferences(
     .filter((locator) => results.has(locator))
     .map((locator) => results.get(locator) as StateReference);
 }
+
+type Resolved = Extract<StateReference, { status: 'resolved' }>;
+
+/**
+ * Whether two resolved references cite the same bytes. The same artifact and
+ * range are equal without reading; otherwise both ranges are compared by
+ * streaming, so a moved or edited range is caught whatever the file's size.
+ */
+export async function sameEvidence(
+  project: Project,
+  a: Resolved,
+  b: Resolved,
+): Promise<boolean> {
+  if (
+    a.artifact === b.artifact &&
+    a.startByte === b.startByte &&
+    a.endByte === b.endByte
+  ) {
+    return true;
+  }
+  const length = a.endByte - a.startByte;
+  if (length !== b.endByte - b.startByte) return false;
+  const first = await openRegularFile(
+    artifactPath(project.artifacts, a.artifact),
+  );
+  try {
+    const second = await openRegularFile(
+      artifactPath(project.artifacts, b.artifact),
+    );
+    try {
+      const size = Math.min(STREAM_CHUNK_BYTES, Math.max(length, 1));
+      const x = Buffer.alloc(size);
+      const y = Buffer.alloc(size);
+      for (let offset = 0; offset < length; offset += size) {
+        const want = Math.min(size, length - offset);
+        const [read1, read2] = await Promise.all([
+          first.read(x, 0, want, a.startByte + offset),
+          second.read(y, 0, want, b.startByte + offset),
+        ]);
+        if (
+          read1.bytesRead !== want ||
+          read2.bytesRead !== want ||
+          !x.subarray(0, want).equals(y.subarray(0, want))
+        ) {
+          return false;
+        }
+      }
+      return true;
+    } finally {
+      await second.close();
+    }
+  } finally {
+    await first.close();
+  }
+}
