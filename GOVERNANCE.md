@@ -42,6 +42,12 @@ Current contribution terms are documented in [CONTRIBUTING.md](CONTRIBUTING.md).
 Changes to licensing or contribution requirements need an explicit maintainer
 decision and must be documented before affected contributions are accepted.
 
+## Project identity
+
+The Sulai name and project identity identify the official Sulai project. Modified
+distributions should use a distinct name and may accurately describe themselves as
+based on or derived from Sulai.
+
 ## Publication and history
 
 Before initial publication, maintainers may curate unpublished history with
