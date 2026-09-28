@@ -83,8 +83,8 @@ it reads. So Sulai never relies on the user's configuration for these, and sets 
   checking the working tree does not refresh the index.
 - **No external programs.** `core.fsmonitor` is off, there is no pager, and only plumbing and status
   commands run, so no hook, filter or textconv program runs.
-- **Explicit flags.** The status check passes its own flags (`--porcelain=v1 -z
---untracked-files=all --ignore-submodules=none`) rather than taking them from configuration.
+- **Explicit flags.** The status check passes its own flags, such as `--untracked-files=all` and
+  `--ignore-submodules=none`, rather than taking them from configuration.
 - **Git's own safety settings stay.** Sulai does not override `safe.directory` or similar.
 
 Sulai checks that the `git` it finds supports these switches, and refuses Git acquisition if it does
