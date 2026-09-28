@@ -16,9 +16,16 @@ import {
  * which could not be captured and why. It is separate from artifact identity,
  * because the same bytes can arrive in many events and an event is not bytes.
  * It knows nothing about any provider.
+ *
+ * Version 2 adds Git roots (ADR 0009): one commit read from a repository's
+ * objects, not a folder walked on disk. Version 1 records stay valid, and every
+ * one of their roots is a filesystem root.
  */
 export const OCCURRENCE_FORMAT = 'sulai.occurrence';
-export const OCCURRENCE_VERSION = 1;
+
+/** The version new records are written in. */
+export const OCCURRENCE_VERSION = 2;
+export type OccurrenceVersion = 1 | 2;
 
 /**
  * Bounds any in-memory read of one occurrence record. This limits a reader of
@@ -26,7 +33,7 @@ export const OCCURRENCE_VERSION = 1;
  */
 export const MAX_OCCURRENCE_BYTES = 64 * 1024 * 1024;
 
-export type OccurrenceId = `occurrence:v1:${string}`;
+export type OccurrenceId = `occurrence:v${OccurrenceVersion}:${string}`;
 
 export const SKIP_REASONS = [
   'symbolic-link',
@@ -38,11 +45,24 @@ export const SKIP_REASONS = [
 ] as const;
 export type SkipReason = (typeof SKIP_REASONS)[number];
 
-export const EXCLUSION_REASONS = ['project-store'] as const;
+export const EXCLUSION_REASONS = ['project-store', 'submodule'] as const;
 export type ExclusionReason = (typeof EXCLUSION_REASONS)[number];
 
-export interface OccurrenceRoot {
+export const GIT_OBJECT_FORMATS = ['sha1', 'sha256'] as const;
+export type GitObjectFormat = (typeof GIT_OBJECT_FORMATS)[number];
+
+/** The tree modes of a captured blob: regular, executable, symbolic link. */
+export const GIT_BLOB_MODES = ['100644', '100755', '120000'] as const;
+export type GitBlobMode = (typeof GIT_BLOB_MODES)[number];
+
+export const WORKTREE_STATES = ['clean', 'differs', 'absent'] as const;
+export type WorktreeState = (typeof WORKTREE_STATES)[number];
+
+/** A file or a directory walked on the acquiring machine. */
+export interface FilesystemRoot {
   readonly id: string;
+  /** Recorded from version 2 on; absent from version 1 records. */
+  readonly source?: 'filesystem';
   readonly kind: 'file' | 'directory';
   /** The acquiring platform, which says how to read `locator`. */
   readonly platform: string;
@@ -53,7 +73,27 @@ export interface OccurrenceRoot {
   readonly locator: string;
 }
 
-export interface OccurrenceEntry {
+/** One commit, read from a Git repository's objects. */
+export interface GitRoot {
+  readonly id: string;
+  readonly source: 'git';
+  readonly objectFormat: GitObjectFormat;
+  /** The full ID of the commit read. What named it, such as HEAD, is not kept. */
+  readonly commit: string;
+  readonly tree: string;
+  /**
+   * Whether the working tree matched the commit when it was read: `clean`,
+   * `differs` when captured anyway, or `absent` for a bare repository.
+   */
+  readonly worktree: WorktreeState;
+  readonly platform: string;
+  /** Where the repository was, as observed. Not identity, as for a folder. */
+  readonly locator: string;
+}
+
+export type OccurrenceRoot = FilesystemRoot | GitRoot;
+
+export interface FileEntry {
   readonly root: string;
   /** Relative to the root, `/`-separated; empty only for a file root. */
   readonly path: string;
@@ -65,21 +105,46 @@ export interface OccurrenceEntry {
   readonly new: boolean;
 }
 
+export interface GitEntry {
+  readonly root: string;
+  readonly path: string;
+  readonly artifact: ArtifactId;
+  readonly byteLength: number;
+  /** A symbolic link's bytes are its target; it is never followed. */
+  readonly mode: GitBlobMode;
+  /** The blob ID the tree names, checked against the bytes as they were read. */
+  readonly blob: string;
+  readonly new: boolean;
+}
+
+export type OccurrenceEntry = FileEntry | GitEntry;
+
 export interface OccurrenceSkip {
   readonly root: string;
   readonly path: string;
   readonly reason: SkipReason;
 }
 
-export interface OccurrenceExclusion {
+/** The project's own store, excluded from a folder walk that reaches it. */
+export interface StoreExclusion {
   readonly root: string;
   readonly path: string;
-  readonly reason: ExclusionReason;
+  readonly reason: 'project-store';
 }
+
+/** A submodule names another repository's commit, which is not entered. */
+export interface SubmoduleExclusion {
+  readonly root: string;
+  readonly path: string;
+  readonly reason: 'submodule';
+  readonly commit: string;
+}
+
+export type OccurrenceExclusion = StoreExclusion | SubmoduleExclusion;
 
 export interface Occurrence {
   readonly format: typeof OCCURRENCE_FORMAT;
-  readonly version: typeof OCCURRENCE_VERSION;
+  readonly version: OccurrenceVersion;
   /** Makes two otherwise identical acquisitions two distinct events. */
   readonly nonce: string;
   readonly startedAt: string;
@@ -92,28 +157,36 @@ export interface Occurrence {
   readonly excluded: readonly OccurrenceExclusion[];
 }
 
+const isFileRoot = (root: OccurrenceRoot) =>
+  root.source !== 'git' && root.kind === 'file';
+
 function isAbsoluteFor(platform: string, locator: string): boolean {
   return platform === 'win32'
     ? /^[A-Za-z]:\\/.test(locator) || locator.startsWith('\\\\')
     : locator.startsWith('/');
 }
 
-function parseRoot(value: unknown, index: number): OccurrenceRoot {
-  const input = record(
-    value,
-    ['id', 'kind', 'platform', 'locator'],
-    'Occurrence root',
-  );
+/** A full object ID in the repository's object format, in lowercase. */
+function objectId(
+  value: unknown,
+  format: GitObjectFormat,
+  label: string,
+): string {
+  if (typeof value !== 'string' || !/^[a-f0-9]+$/.test(value)) {
+    throw new ValidationError(`${label} must be a lowercase object ID`);
+  }
+  if (value.length !== (format === 'sha1' ? 40 : 64)) {
+    throw new ValidationError(`${label} is not a full ${format} object ID`);
+  }
+  return value;
+}
+
+function rootPlace(input: Record<string, unknown>, index: number) {
   if (input.id !== `r${index + 1}`) {
     throw new ValidationError(
       'Occurrence roots must be numbered r1, r2, ... in order',
     );
   }
-  const kind = oneOf(
-    input.kind,
-    ['file', 'directory'] as const,
-    'Occurrence root kind',
-  );
   if (
     typeof input.platform !== 'string' ||
     !/^[a-z0-9]{1,32}$/.test(input.platform)
@@ -126,12 +199,75 @@ function parseRoot(value: unknown, index: number): OccurrenceRoot {
       'Occurrence root locator must be an absolute path for its platform',
     );
   }
-  return { id: input.id, kind, platform: input.platform, locator };
+  return { id: input.id, platform: input.platform, locator };
+}
+
+const rootKind = (value: unknown) =>
+  oneOf(value, ['file', 'directory'] as const, 'Occurrence root kind');
+
+function parseRoot(
+  version: OccurrenceVersion,
+): (value: unknown, index: number) => OccurrenceRoot {
+  return (value, index) => {
+    if (version === 1) {
+      const input = record(
+        value,
+        ['id', 'kind', 'platform', 'locator'],
+        'Occurrence root',
+      );
+      const { id, platform, locator } = rootPlace(input, index);
+      return { id, kind: rootKind(input.kind), platform, locator };
+    }
+    const source = oneOf(
+      (value as { source?: unknown } | null)?.source,
+      ['filesystem', 'git'] as const,
+      'Occurrence root source',
+    );
+    if (source === 'filesystem') {
+      const input = record(
+        value,
+        ['id', 'source', 'kind', 'platform', 'locator'],
+        'Occurrence root',
+      );
+      const { id, platform, locator } = rootPlace(input, index);
+      return { id, source, kind: rootKind(input.kind), platform, locator };
+    }
+    const input = record(
+      value,
+      [
+        'id',
+        'source',
+        'objectFormat',
+        'commit',
+        'tree',
+        'worktree',
+        'platform',
+        'locator',
+      ],
+      'Git root',
+    );
+    const { id, platform, locator } = rootPlace(input, index);
+    const objectFormat = oneOf(
+      input.objectFormat,
+      GIT_OBJECT_FORMATS,
+      'Git object format',
+    );
+    return {
+      id,
+      source,
+      objectFormat,
+      commit: objectId(input.commit, objectFormat, 'Git root commit'),
+      tree: objectId(input.tree, objectFormat, 'Git root tree'),
+      worktree: oneOf(input.worktree, WORKTREE_STATES, 'Git root worktree'),
+      platform,
+      locator,
+    };
+  };
 }
 
 function relativePath(value: unknown, root: OccurrenceRoot): string {
   const path = text(value, 'Occurrence path');
-  if (root.kind === 'file') {
+  if (isFileRoot(root)) {
     if (path !== '') {
       throw new ValidationError('A file root is recorded with an empty path');
     }
@@ -160,16 +296,17 @@ interface Located {
   readonly path: string;
 }
 
-function locate(
-  value: Record<string, unknown>,
+/** The root an item names, found first because it decides the item's shape. */
+function rootOf(
+  value: unknown,
   roots: ReadonlyMap<string, OccurrenceRoot>,
-): Located {
-  const root =
-    typeof value.root === 'string' ? roots.get(value.root) : undefined;
+): OccurrenceRoot {
+  const id = (value as { root?: unknown } | null)?.root;
+  const root = typeof id === 'string' ? roots.get(id) : undefined;
   if (root === undefined) {
     throw new ValidationError('Occurrence item names an unknown root');
   }
-  return { root: root.id, path: relativePath(value.path, root) };
+  return root;
 }
 
 function compareLocated(
@@ -226,10 +363,11 @@ function validate(value: unknown): Occurrence {
   );
   if (
     input.format !== OCCURRENCE_FORMAT ||
-    input.version !== OCCURRENCE_VERSION
+    (input.version !== 1 && input.version !== 2)
   ) {
     throw new ValidationError('Unsupported occurrence format or version');
   }
+  const version: OccurrenceVersion = input.version;
   if (typeof input.nonce !== 'string' || !/^[a-f0-9]{32}$/.test(input.nonce)) {
     throw new ValidationError(
       'Occurrence nonce must be 32 lowercase hexadecimal characters',
@@ -241,7 +379,7 @@ function validate(value: unknown): Occurrence {
     throw new ValidationError('Occurrence cannot finish before it starts');
   }
 
-  const roots = array(input.roots, 'Occurrence roots').map(parseRoot);
+  const roots = array(input.roots, 'Occurrence roots').map(parseRoot(version));
   if (roots.length === 0) {
     throw new ValidationError('An occurrence needs at least one root');
   }
@@ -249,14 +387,20 @@ function validate(value: unknown): Occurrence {
   const order = new Map(roots.map((root, index) => [root.id, index]));
 
   const artifacts = new Map<ArtifactId, { byteLength: number; new: boolean }>();
+  // Within one object format, a blob ID and its bytes determine each other.
+  const blobBytes = new Map<string, ArtifactId>();
+  const bytesBlob = new Map<string, string>();
   const entries = array(input.entries, 'Occurrence entries').map(
     (value): OccurrenceEntry => {
+      const root = rootOf(value, rootById);
       const item = record(
         value,
-        ['root', 'path', 'artifact', 'byteLength', 'modifiedAt', 'new'],
+        root.source === 'git'
+          ? ['root', 'path', 'artifact', 'byteLength', 'mode', 'blob', 'new']
+          : ['root', 'path', 'artifact', 'byteLength', 'modifiedAt', 'new'],
         'Occurrence entry',
       );
-      const where = locate(item, rootById);
+      const path = relativePath(item.path, root);
       const artifact = parseArtifactId(item.artifact);
       if (
         typeof item.byteLength !== 'number' ||
@@ -280,35 +424,84 @@ function validate(value: unknown): Occurrence {
         );
       }
       artifacts.set(artifact, { byteLength: item.byteLength, new: item.new });
+      if (root.source !== 'git') {
+        return {
+          root: root.id,
+          path,
+          artifact,
+          byteLength: item.byteLength,
+          modifiedAt: timestamp(item.modifiedAt, 'Occurrence entry modifiedAt'),
+          new: item.new,
+        };
+      }
+      const blob = objectId(item.blob, root.objectFormat, 'Git entry blob');
+      const format = root.objectFormat;
+      const knownBytes = blobBytes.get(`${format} ${blob}`);
+      const knownBlob = bytesBlob.get(`${format} ${artifact}`);
+      if (
+        (knownBytes !== undefined && knownBytes !== artifact) ||
+        (knownBlob !== undefined && knownBlob !== blob)
+      ) {
+        throw new ValidationError(
+          'Git entries disagree about which bytes a blob holds',
+        );
+      }
+      blobBytes.set(`${format} ${blob}`, artifact);
+      bytesBlob.set(`${format} ${artifact}`, blob);
       return {
-        ...where,
+        root: root.id,
+        path,
         artifact,
         byteLength: item.byteLength,
-        modifiedAt: timestamp(item.modifiedAt, 'Occurrence entry modifiedAt'),
+        mode: oneOf(item.mode, GIT_BLOB_MODES, 'Git entry mode'),
+        blob,
         new: item.new,
       };
     },
   );
   const skipped = array(input.skipped, 'Occurrence skipped').map(
     (value): OccurrenceSkip => {
+      const root = rootOf(value, rootById);
       const item = record(value, ['root', 'path', 'reason'], 'Skipped item');
-      return {
-        ...locate(item, rootById),
-        reason: oneOf(item.reason, SKIP_REASONS, 'Skip reason'),
-      };
+      const reason = oneOf(item.reason, SKIP_REASONS, 'Skip reason');
+      // A commit's tree holds only blobs and submodules, so the one thing in it
+      // that cannot be recorded is a name that is not UTF-8.
+      if (root.source === 'git' && reason !== 'non-utf8-name') {
+        throw new ValidationError(
+          'A Git root skips only names that are not valid UTF-8',
+        );
+      }
+      return { root: root.id, path: relativePath(item.path, root), reason };
     },
   );
   const excluded = array(input.excluded, 'Occurrence excluded').map(
     (value): OccurrenceExclusion => {
+      const root = rootOf(value, rootById);
+      if (root.source === 'git') {
+        if ((value as { reason?: unknown }).reason !== 'submodule') {
+          throw new ValidationError('A Git root excludes only submodules');
+        }
+        const item = record(
+          value,
+          ['root', 'path', 'reason', 'commit'],
+          'Excluded item',
+        );
+        return {
+          root: root.id,
+          path: relativePath(item.path, root),
+          reason: 'submodule',
+          commit: objectId(item.commit, root.objectFormat, 'Submodule commit'),
+        };
+      }
       const item = record(value, ['root', 'path', 'reason'], 'Excluded item');
-      const where = locate(item, rootById);
-      if (rootById.get(where.root)?.kind !== 'directory') {
+      if (root.kind !== 'directory') {
         throw new ValidationError('Only a directory root can have exclusions');
       }
-      return {
-        ...where,
-        reason: oneOf(item.reason, EXCLUSION_REASONS, 'Exclusion reason'),
-      };
+      const reason = oneOf(item.reason, EXCLUSION_REASONS, 'Exclusion reason');
+      if (reason !== 'project-store') {
+        throw new ValidationError('Only a Git root can exclude a submodule');
+      }
+      return { root: root.id, path: relativePath(item.path, root), reason };
     },
   );
 
@@ -342,7 +535,7 @@ function validate(value: unknown): Occurrence {
     const items = [...entries, ...skipped].filter(
       (item) => item.root === root.id,
     );
-    if (root.kind === 'file' && items.length !== 1) {
+    if (isFileRoot(root) && items.length !== 1) {
       throw new ValidationError('A file root records exactly one input');
     }
   }
@@ -359,7 +552,7 @@ function validate(value: unknown): Occurrence {
 
   return {
     format: OCCURRENCE_FORMAT,
-    version: OCCURRENCE_VERSION,
+    version,
     nonce: input.nonce,
     startedAt,
     finishedAt,
@@ -384,30 +577,68 @@ function serialize(occurrence: Occurrence): Uint8Array {
     startedAt: occurrence.startedAt,
     finishedAt: occurrence.finishedAt,
     status: occurrence.status,
-    roots: occurrence.roots.map((root) => ({
-      id: root.id,
-      kind: root.kind,
-      platform: root.platform,
-      locator: root.locator,
-    })),
-    entries: occurrence.entries.map((entry) => ({
-      root: entry.root,
-      path: entry.path,
-      artifact: entry.artifact,
-      byteLength: entry.byteLength,
-      modifiedAt: entry.modifiedAt,
-      new: entry.new,
-    })),
+    roots: occurrence.roots.map((root) =>
+      root.source === 'git'
+        ? {
+            id: root.id,
+            source: root.source,
+            objectFormat: root.objectFormat,
+            commit: root.commit,
+            tree: root.tree,
+            worktree: root.worktree,
+            platform: root.platform,
+            locator: root.locator,
+          }
+        : root.source === undefined
+          ? {
+              id: root.id,
+              kind: root.kind,
+              platform: root.platform,
+              locator: root.locator,
+            }
+          : {
+              id: root.id,
+              source: root.source,
+              kind: root.kind,
+              platform: root.platform,
+              locator: root.locator,
+            },
+    ),
+    entries: occurrence.entries.map((entry) =>
+      'blob' in entry
+        ? {
+            root: entry.root,
+            path: entry.path,
+            artifact: entry.artifact,
+            byteLength: entry.byteLength,
+            mode: entry.mode,
+            blob: entry.blob,
+            new: entry.new,
+          }
+        : {
+            root: entry.root,
+            path: entry.path,
+            artifact: entry.artifact,
+            byteLength: entry.byteLength,
+            modifiedAt: entry.modifiedAt,
+            new: entry.new,
+          },
+    ),
     skipped: occurrence.skipped.map((item) => ({
       root: item.root,
       path: item.path,
       reason: item.reason,
     })),
-    excluded: occurrence.excluded.map((item) => ({
-      root: item.root,
-      path: item.path,
-      reason: item.reason,
-    })),
+    excluded: occurrence.excluded.map((item) =>
+      item.reason === 'submodule'
+        ? {
+            root: item.root,
+            path: item.path,
+            reason: item.reason,
+            commit: item.commit,
+          }
+        : { root: item.root, path: item.path, reason: item.reason },
+    ),
   };
   return Buffer.from(`${JSON.stringify(canonical)}\n`, 'utf8');
 }
@@ -425,17 +656,21 @@ function freeze(occurrence: Occurrence): Occurrence {
   return Object.freeze(occurrence);
 }
 
-export function occurrenceIdOf(bytes: Uint8Array): OccurrenceId {
+/** The identity of a record's bytes, which declare the given version. */
+export function occurrenceIdOf(
+  bytes: Uint8Array,
+  version: OccurrenceVersion,
+): OccurrenceId {
   if (!(bytes instanceof Uint8Array)) {
     throw new ValidationError('Occurrence content must be bytes');
   }
-  return `occurrence:v1:${createHash('sha256').update(bytes).digest('hex')}`;
+  return `occurrence:v${version}:${createHash('sha256').update(bytes).digest('hex')}`;
 }
 
 export function parseOccurrenceId(value: unknown): OccurrenceId {
   if (
     typeof value !== 'string' ||
-    !/^occurrence:v1:[a-f0-9]{64}$/.test(value)
+    !/^occurrence:v[12]:[a-f0-9]{64}$/.test(value)
   ) {
     throw new ValidationError('Invalid occurrence ID');
   }
@@ -458,7 +693,7 @@ export function encodeOccurrence(value: unknown): {
       `Occurrence record is ${bytes.byteLength} bytes; at most ${MAX_OCCURRENCE_BYTES} are supported`,
     );
   }
-  return { id: occurrenceIdOf(bytes), bytes, occurrence };
+  return { id: occurrenceIdOf(bytes, occurrence.version), bytes, occurrence };
 }
 
 /**

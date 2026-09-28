@@ -46,10 +46,50 @@ test('a state revision has exactly one encoding, and its identity is the hash of
   assert.equal(Buffer.from(bytes).toString('utf8'), GOLDEN_TEXT);
   assert.equal(bytes.byteLength, 510);
   assert.equal(id, GOLDEN_ID);
-  assert.equal(stateIdOf(bytes), GOLDEN_ID);
+  assert.equal(stateIdOf(bytes, 1), GOLDEN_ID);
   assert.deepEqual(parseStateRevision(bytes), revision);
   assert.equal(Object.isFrozen(revision.references[0]), true);
   assert.equal(parseStateId(GOLDEN_ID), GOLDEN_ID);
+});
+
+test('a version 2 revision may name records of either version', () => {
+  const occurrence = `occurrence:v2:${'0'.repeat(64)}`;
+  const value = {
+    ...golden(),
+    version: 2,
+    parent: GOLDEN_ID,
+    occurrence,
+    references: [
+      {
+        locator: 'r2/bin/run#L1',
+        status: 'resolved',
+        artifact: ABC,
+        startByte: 0,
+        endByte: 3,
+      },
+    ],
+  };
+  // Written out by hand, and hashed with `sha256sum`.
+  const text = `{"format":"sulai.state","version":2,"parent":"${GOLDEN_ID}","createdAt":"2026-01-02T03:04:05.006Z","page":"${ABC}","occurrence":"${occurrence}","references":[{"locator":"r2/bin/run#L1","status":"resolved","artifact":"${ABC}","startByte":0,"endByte":3}]}\n`;
+  const id =
+    'state:v2:d1f7d01d466c18d8bbae154e34868fc19e7f40f774cf60c12baff2278d11d008';
+  const encoded = encodeStateRevision(value);
+  assert.equal(Buffer.from(encoded.bytes).toString('utf8'), text);
+  assert.equal(encoded.id, id);
+  assert.equal(stateIdOf(encoded.bytes, 2), id);
+  assert.deepEqual(parseStateRevision(Buffer.from(text)), value);
+  assert.equal(parseStateId(id), id);
+  // Version 1 names only version 1 records.
+  for (const older of [
+    { ...value, version: 1 },
+    { ...value, version: 1, occurrence: OCCURRENCE, parent: id },
+  ]) {
+    assert.throws(
+      () => encodeStateRevision(older),
+      /names only version 1 records/,
+    );
+  }
+  assert.throws(() => parseStateId(id.replace('v2', 'v3')), ValidationError);
 });
 
 test('locators name a root, a path and lines, and nothing else is a reference', () => {

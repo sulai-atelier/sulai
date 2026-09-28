@@ -179,7 +179,9 @@ export async function resolveReferences(
       unresolved('unknown-root');
       continue;
     }
-    if ((root.kind === 'file') !== (parsed.path === '')) {
+    // A file root is cited without a path; a directory or a commit, with one.
+    const isFile = root.source !== 'git' && root.kind === 'file';
+    if (isFile !== (parsed.path === '')) {
       unresolved('path-not-in-occurrence');
       continue;
     }

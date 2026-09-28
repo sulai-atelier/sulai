@@ -12,10 +12,13 @@ export type {
 } from './conversation.js';
 export {
   EXCLUSION_REASONS,
+  GIT_BLOB_MODES,
+  GIT_OBJECT_FORMATS,
   MAX_OCCURRENCE_BYTES,
   OCCURRENCE_FORMAT,
   OCCURRENCE_VERSION,
   SKIP_REASONS,
+  WORKTREE_STATES,
   encodeOccurrence,
   occurrenceIdOf,
   parseOccurrence,
@@ -23,13 +26,23 @@ export {
 } from './occurrence.js';
 export type {
   ExclusionReason,
+  FileEntry,
+  FilesystemRoot,
+  GitBlobMode,
+  GitEntry,
+  GitObjectFormat,
+  GitRoot,
   Occurrence,
   OccurrenceEntry,
   OccurrenceExclusion,
   OccurrenceId,
   OccurrenceRoot,
   OccurrenceSkip,
+  OccurrenceVersion,
   SkipReason,
+  StoreExclusion,
+  SubmoduleExclusion,
+  WorktreeState,
 } from './occurrence.js';
 export {
   MAX_STATE_PAGE_BYTES,
@@ -49,6 +62,7 @@ export type {
   StateId,
   StateReference,
   StateRevision,
+  StateVersion,
   UnresolvedReason,
 } from './state.js';
 export {

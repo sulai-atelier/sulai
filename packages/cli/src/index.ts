@@ -1,6 +1,7 @@
 /** The operations behind each `sulai` command, one module per concern. */
 export { importArtifactFile, readStoredArtifact } from './artifacts.js';
 export { importPath, importPaths } from './acquire.js';
+export type { AcquisitionRoot } from './acquire.js';
 export {
   inspectArtifact,
   inspectOccurrence,
@@ -17,3 +18,4 @@ export {
   recordState,
 } from './state.js';
 export { STREAM_CHUNK_BYTES } from './store.js';
+export { upgradeProject } from './upgrade.js';

@@ -2,50 +2,75 @@
  * Stored occurrence records: where they live, how they are read back and
  * verified, and how they are checked against the artifacts they name.
  */
+import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import {
   MAX_OCCURRENCE_BYTES,
   occurrenceIdOf,
   parseOccurrence,
-  parseOccurrenceId,
   ValidationError,
 } from '@sulai/core';
 import type { ArtifactId, Occurrence, OccurrenceId } from '@sulai/core';
 import { readBounded } from './store.js';
 
+/**
+ * A record is stored as `<sha256>.json` whatever its version, because the hash
+ * alone is unique. The version the bytes declare completes the identity.
+ */
 export function occurrencePath(occurrencesDirectory: string, id: OccurrenceId) {
   return join(
     occurrencesDirectory,
-    `${id.slice('occurrence:v1:'.length)}.json`,
+    `${id.slice(id.lastIndexOf(':') + 1)}.json`,
   );
-}
-
-export function storedOccurrenceId(filename: string): OccurrenceId {
-  if (!/^[a-f0-9]{64}\.json$/.test(filename)) {
-    throw new ValidationError('Unexpected entry in the occurrence store');
-  }
-  return parseOccurrenceId(`occurrence:v1:${filename.slice(0, -5)}`);
 }
 
 /**
- * Reads one stored occurrence, checks it still hashes to the name it is stored
- * under, and parses it strictly. Nothing about the inputs it names is trusted
+ * Reads the record stored under one hash, checks the bytes still have that
+ * hash, and parses them strictly. Nothing about the inputs it names is trusted
  * until the artifacts are checked separately.
  */
-export async function readStoredOccurrence(
+async function readRecord(
   occurrencesDirectory: string,
-  id: OccurrenceId,
-): Promise<Occurrence> {
+  hash: string,
+): Promise<{ id: OccurrenceId; occurrence: Occurrence }> {
   const bytes = await readBounded(
-    occurrencePath(occurrencesDirectory, id),
+    join(occurrencesDirectory, `${hash}.json`),
     MAX_OCCURRENCE_BYTES,
   );
-  if (occurrenceIdOf(bytes) !== id) {
+  if (createHash('sha256').update(bytes).digest('hex') !== hash) {
     throw new ValidationError(
       'Stored occurrence hash does not match its identity',
     );
   }
-  return parseOccurrence(bytes);
+  const occurrence = parseOccurrence(bytes);
+  return { id: occurrenceIdOf(bytes, occurrence.version), occurrence };
+}
+
+/** One entry of the occurrence directory, with the identity its bytes give it. */
+export function readOccurrenceFile(
+  occurrencesDirectory: string,
+  filename: string,
+) {
+  if (!/^[a-f0-9]{64}\.json$/.test(filename)) {
+    throw new ValidationError('Unexpected entry in the occurrence store');
+  }
+  return readRecord(occurrencesDirectory, filename.slice(0, -5));
+}
+
+export async function readStoredOccurrence(
+  occurrencesDirectory: string,
+  id: OccurrenceId,
+): Promise<Occurrence> {
+  const stored = await readRecord(
+    occurrencesDirectory,
+    id.slice(id.lastIndexOf(':') + 1),
+  );
+  if (stored.id !== id) {
+    throw new ValidationError(
+      `${id} is not stored; the record under its hash is ${stored.id}`,
+    );
+  }
+  return stored.occurrence;
 }
 
 export function assertStoredArtifacts(

@@ -72,7 +72,7 @@ test('an occurrence has exactly one encoding, and its identity is the hash of it
   assert.equal(Buffer.from(bytes).toString('utf8'), GOLDEN_TEXT);
   assert.equal(bytes.byteLength, 791);
   assert.equal(id, GOLDEN_ID);
-  assert.equal(occurrenceIdOf(bytes), GOLDEN_ID);
+  assert.equal(occurrenceIdOf(bytes, 1), GOLDEN_ID);
   assert.deepEqual(parseOccurrence(bytes), occurrence);
   assert.deepEqual(parseOccurrence(Buffer.from(GOLDEN_TEXT)), golden());
   assert.equal(parseOccurrenceId(GOLDEN_ID), GOLDEN_ID);
@@ -142,7 +142,7 @@ test('every structural rule is enforced on both encoding and parsing', () => {
       /missing or unknown fields/,
     ],
     ['format', variant((v) => (v.format = 'sulai.other')), /format or version/],
-    ['version', variant((v) => (v.version = 2)), /format or version/],
+    ['version', variant((v) => (v.version = 3)), /format or version/],
     [
       'uppercase nonce',
       variant((v) => (v.nonce = v.nonce.toUpperCase())),
@@ -385,7 +385,7 @@ test('occurrence identities are validated', () => {
     null,
     '',
     GOLDEN_ID.toUpperCase(),
-    GOLDEN_ID.replace('v1', 'v2'),
+    GOLDEN_ID.replace('v1', 'v3'),
     `${GOLDEN_ID}0`,
     `sha256:${'a'.repeat(64)}`,
     '../occurrences/x',
@@ -396,4 +396,269 @@ test('occurrence identities are validated', () => {
       String(value),
     );
   }
+});
+
+// The Git blob IDs of "abc" and of "bin/run", and the SHA-256 of "bin/run",
+// computed with `git hash-object` and `sha256sum`.
+const ABC_BLOB = 'f2ba8f84ab5c1bce84a7b441cb1959cfc7093b7f';
+const LINK_BLOB = 'e08d0670e1da0f198f469c22be19212af7ac5f61';
+const LINK =
+  'sha256:57b94356302c85712d33811d8bda2a57b5181e3b496466db149873f6ed118265';
+
+function goldenV2() {
+  return {
+    format: 'sulai.occurrence',
+    version: 2,
+    nonce: '0123456789abcdef0123456789abcdef',
+    startedAt: '2026-01-02T03:04:05.006Z',
+    finishedAt: '2026-01-02T03:04:06.007Z',
+    status: 'partial',
+    roots: [
+      {
+        id: 'r1',
+        source: 'filesystem',
+        kind: 'directory',
+        platform: 'linux',
+        locator: '/synthetic/notes',
+      },
+      {
+        id: 'r2',
+        source: 'git',
+        objectFormat: 'sha1',
+        commit: '1'.repeat(40),
+        tree: '2'.repeat(40),
+        worktree: 'clean',
+        platform: 'linux',
+        locator: '/synthetic/repo',
+      },
+    ] as Record<string, unknown>[],
+    entries: [
+      {
+        root: 'r1',
+        path: 'a.txt',
+        artifact: ABC,
+        byteLength: 3,
+        modifiedAt: '2026-01-01T00:00:00.000Z',
+        new: true,
+      },
+      {
+        root: 'r2',
+        path: 'bin/run',
+        artifact: ABC,
+        byteLength: 3,
+        mode: '100755',
+        blob: ABC_BLOB,
+        new: true,
+      },
+      {
+        root: 'r2',
+        path: 'link',
+        artifact: LINK,
+        byteLength: 7,
+        mode: '120000',
+        blob: LINK_BLOB,
+        new: false,
+      },
+    ] as Record<string, unknown>[],
+    skipped: [
+      { root: 'r2', path: 'bad�.txt', reason: 'non-utf8-name' },
+    ] as Record<string, unknown>[],
+    excluded: [
+      {
+        root: 'r2',
+        path: 'vendor/lib',
+        reason: 'submodule',
+        commit: '3'.repeat(40),
+      },
+    ] as Record<string, unknown>[],
+  };
+}
+
+type GoldenV2 = ReturnType<typeof goldenV2>;
+
+// Written out by hand, and hashed with `sha256sum`.
+const GOLDEN_V2_TEXT = `{"format":"sulai.occurrence","version":2,"nonce":"0123456789abcdef0123456789abcdef","startedAt":"2026-01-02T03:04:05.006Z","finishedAt":"2026-01-02T03:04:06.007Z","status":"partial","roots":[{"id":"r1","source":"filesystem","kind":"directory","platform":"linux","locator":"/synthetic/notes"},{"id":"r2","source":"git","objectFormat":"sha1","commit":"${'1'.repeat(40)}","tree":"${'2'.repeat(40)}","worktree":"clean","platform":"linux","locator":"/synthetic/repo"}],"entries":[{"root":"r1","path":"a.txt","artifact":"${ABC}","byteLength":3,"modifiedAt":"2026-01-01T00:00:00.000Z","new":true},{"root":"r2","path":"bin/run","artifact":"${ABC}","byteLength":3,"mode":"100755","blob":"${ABC_BLOB}","new":true},{"root":"r2","path":"link","artifact":"${LINK}","byteLength":7,"mode":"120000","blob":"${LINK_BLOB}","new":false}],"skipped":[{"root":"r2","path":"bad�.txt","reason":"non-utf8-name"}],"excluded":[{"root":"r2","path":"vendor/lib","reason":"submodule","commit":"${'3'.repeat(40)}"}]}\n`;
+const GOLDEN_V2_ID =
+  'occurrence:v2:154f9f82f8882451842215467f2f6439d190efa1a68a97c030e8e8d9534bd27b';
+
+function variantV2(change: (value: GoldenV2) => void): GoldenV2 {
+  const value = goldenV2();
+  change(value);
+  return value;
+}
+
+test('a version 2 occurrence mixes folder and Git roots, with one encoding', () => {
+  const { id, bytes, occurrence } = encodeOccurrence(goldenV2());
+  assert.equal(Buffer.from(bytes).toString('utf8'), GOLDEN_V2_TEXT);
+  assert.equal(bytes.byteLength, 1308);
+  assert.equal(id, GOLDEN_V2_ID);
+  assert.equal(occurrenceIdOf(bytes, 2), GOLDEN_V2_ID);
+  assert.deepEqual(parseOccurrence(bytes), occurrence);
+  assert.deepEqual(parseOccurrence(Buffer.from(GOLDEN_V2_TEXT)), goldenV2());
+  assert.equal(parseOccurrenceId(GOLDEN_V2_ID), GOLDEN_V2_ID);
+  // A version 1 record is still read as written, with no source on its roots.
+  const v1 = parseOccurrence(Buffer.from(GOLDEN_TEXT));
+  assert.equal(v1.version, 1);
+  assert.equal('source' in (v1.roots[0] as object), false);
+});
+
+test('every version 2 rule is enforced on both encoding and parsing', () => {
+  const root = (v: GoldenV2, index: number) =>
+    v.roots[index] as Record<string, unknown>;
+  const entry = (v: GoldenV2, index: number) =>
+    v.entries[index] as Record<string, unknown>;
+  const invalid: Array<[string, unknown, RegExp]> = [
+    [
+      'root without a source',
+      variantV2((v) => delete root(v, 0).source),
+      /root source/,
+    ],
+    [
+      'unknown source',
+      variantV2((v) => (root(v, 1).source = 'svn')),
+      /root source/,
+    ],
+    [
+      'Git root with a kind',
+      variantV2((v) => (root(v, 1).kind = 'directory')),
+      /missing or unknown fields/,
+    ],
+    [
+      'object format',
+      variantV2((v) => (root(v, 1).objectFormat = 'md5')),
+      /Git object format/,
+    ],
+    [
+      'short commit',
+      variantV2((v) => (root(v, 1).commit = '1'.repeat(12))),
+      /full sha1 object ID/,
+    ],
+    [
+      'sha256 commit in a sha1 repository',
+      variantV2((v) => (root(v, 1).commit = '1'.repeat(64))),
+      /full sha1 object ID/,
+    ],
+    [
+      'uppercase tree',
+      variantV2((v) => (root(v, 1).tree = 'A'.repeat(40))),
+      /lowercase object ID/,
+    ],
+    [
+      'worktree',
+      variantV2((v) => (root(v, 1).worktree = 'dirty')),
+      /Git root worktree/,
+    ],
+    [
+      'Git entry with a modification time',
+      variantV2((v) => {
+        delete entry(v, 1).mode;
+        entry(v, 1).modifiedAt = '2026-01-01T00:00:00.000Z';
+      }),
+      /missing or unknown fields/,
+    ],
+    [
+      'folder entry with a blob',
+      variantV2((v) => (entry(v, 0).blob = ABC_BLOB)),
+      /missing or unknown fields/,
+    ],
+    [
+      'tree mode',
+      variantV2((v) => (entry(v, 1).mode = '040000')),
+      /Git entry mode/,
+    ],
+    [
+      'blob length',
+      variantV2((v) => (entry(v, 1).blob = ABC_BLOB.slice(1))),
+      /full sha1 object ID/,
+    ],
+    [
+      'one blob, two artifacts',
+      variantV2((v) => (entry(v, 2).blob = ABC_BLOB)),
+      /disagree about which bytes a blob holds/,
+    ],
+    [
+      'empty path in a Git root',
+      variantV2((v) => (entry(v, 1).path = '')),
+      /relative, \/-separated and normalized/,
+    ],
+    [
+      'Git root skipping a link',
+      variantV2(
+        (v) => ((v.skipped[0] as { reason: string }).reason = 'symbolic-link'),
+      ),
+      /skips only names that are not valid UTF-8/,
+    ],
+    [
+      'Git root excluding the store',
+      variantV2((v) => {
+        v.excluded = [{ root: 'r2', path: '.sulai', reason: 'project-store' }];
+      }),
+      /excludes only submodules/,
+    ],
+    [
+      'folder root excluding a submodule',
+      variantV2((v) => {
+        v.excluded = [{ root: 'r1', path: 'lib', reason: 'submodule' }];
+      }),
+      /Only a Git root can exclude a submodule/,
+    ],
+    [
+      'submodule without its commit',
+      variantV2((v) => delete (v.excluded[0] as { commit?: string }).commit),
+      /missing or unknown fields/,
+    ],
+    [
+      'inside a submodule',
+      variantV2((v) => (entry(v, 2).path = 'vendor/lib/x')),
+      /inside an excluded/,
+    ],
+    [
+      'Git root in version 1',
+      variantV2((v) => {
+        v.version = 1;
+        delete root(v, 0).source;
+      }),
+      /missing or unknown fields/,
+    ],
+  ];
+  for (const [label, value, reason] of invalid) {
+    const refused = (error: unknown) =>
+      error instanceof ValidationError && reason.test(error.message);
+    assert.throws(() => encodeOccurrence(value), refused, `encode: ${label}`);
+    assert.throws(
+      () => parseOccurrence(encode(value)),
+      refused,
+      `parse: ${label}`,
+    );
+  }
+});
+
+test('a sha256 repository records full sha256 object IDs', () => {
+  // The blob ID of "abc" in a sha256 repository, from `git hash-object`.
+  const blob =
+    'c1cf6e465077930e88dc5136641d402f72a229ddd996f627d60e9639eaba35a6';
+  const value = variantV2((v) => {
+    Object.assign(v.roots[1] as object, {
+      objectFormat: 'sha256',
+      commit: '1'.repeat(64),
+      tree: '2'.repeat(64),
+    });
+    const [file, run] = v.entries as [
+      Record<string, unknown>,
+      Record<string, unknown>,
+    ];
+    v.entries = [file, { ...run, blob }];
+    v.skipped = [];
+    v.status = 'complete';
+    v.excluded = [];
+  });
+  assert.equal(encodeOccurrence(value).occurrence.roots.length, 2);
+  assert.throws(
+    () =>
+      encodeOccurrence({
+        ...value,
+        entries: [value.entries[0], { ...value.entries[1], blob: ABC_BLOB }],
+      }),
+    /full sha256 object ID/,
+  );
 });

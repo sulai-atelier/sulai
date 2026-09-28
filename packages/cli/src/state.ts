@@ -2,6 +2,7 @@
  * State revisions (ADR 0007). A revision records a view of the project and
  * exactly what evidence it cited. It certifies none of the view's claims.
  */
+import { createHash } from 'node:crypto';
 import { readdir } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import {
@@ -23,7 +24,7 @@ import type {
   StateReference,
   StateRevision,
 } from '@sulai/core';
-import { readStoredArtifact } from './artifacts.js';
+import { readArtifact } from './artifacts.js';
 import { readStoredOccurrence } from './occurrences.js';
 import { loadProject } from './project.js';
 import type { Project } from './project.js';
@@ -43,36 +44,53 @@ import {
 /** The most evidence `why` returns for one reference. */
 export const MAX_WHY_BYTES = 1024 * 1024;
 
+/** Stored as `<sha256>.json` whatever the version, as occurrences are. */
 function statePath(statesDirectory: string, id: StateId) {
-  return join(statesDirectory, `${id.slice('state:v1:'.length)}.json`);
+  return join(statesDirectory, `${id.slice(id.lastIndexOf(':') + 1)}.json`);
 }
 
-function storedStateId(filename: string): StateId {
-  if (!/^[a-f0-9]{64}\.json$/.test(filename)) {
-    throw new ValidationError('Unexpected entry in the state store');
+async function readRecord(
+  statesDirectory: string,
+  hash: string,
+): Promise<{ id: StateId; revision: StateRevision }> {
+  const bytes = await readBounded(
+    join(statesDirectory, `${hash}.json`),
+    MAX_OCCURRENCE_BYTES,
+  );
+  if (createHash('sha256').update(bytes).digest('hex') !== hash) {
+    throw new ValidationError('Stored state hash does not match its identity');
   }
-  return parseStateId(`state:v1:${filename.slice(0, -5)}`);
+  const revision = parseStateRevision(bytes);
+  return { id: stateIdOf(bytes, revision.version), revision };
 }
 
 async function readStoredState(
   statesDirectory: string,
   id: StateId,
 ): Promise<StateRevision> {
-  const bytes = await readBounded(
-    statePath(statesDirectory, id),
-    MAX_OCCURRENCE_BYTES,
+  const stored = await readRecord(
+    statesDirectory,
+    id.slice(id.lastIndexOf(':') + 1),
   );
-  if (stateIdOf(bytes) !== id) {
-    throw new ValidationError('Stored state hash does not match its identity');
+  if (stored.id !== id) {
+    throw new ValidationError(
+      `${id} is not stored; the record under its hash is ${stored.id}`,
+    );
   }
-  return parseStateRevision(bytes);
+  return stored.revision;
 }
 
 export async function readAllStates(project: Project) {
   const revisions = new Map<StateId, StateRevision>();
   for (const filename of (await readdir(project.states)).sort()) {
-    const id = storedStateId(filename);
-    revisions.set(id, await readStoredState(project.states, id));
+    if (!/^[a-f0-9]{64}\.json$/.test(filename)) {
+      throw new ValidationError('Unexpected entry in the state store');
+    }
+    const { id, revision } = await readRecord(
+      project.states,
+      filename.slice(0, -5),
+    );
+    revisions.set(id, revision);
   }
   return revisions;
 }
@@ -110,11 +128,7 @@ export function summarizeState(id: StateId, revision: StateRevision) {
 }
 
 async function readPage(project: Project, page: ArtifactId) {
-  const artifact = await readStoredArtifact(
-    project.root,
-    page,
-    MAX_STATE_PAGE_BYTES,
-  );
+  const artifact = await readArtifact(project, page, MAX_STATE_PAGE_BYTES);
   return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(
     artifact.bytes(),
   );
@@ -295,7 +309,7 @@ export async function recordState(
     revision,
   } = encodeStateRevision({
     format: 'sulai.state',
-    version: 1,
+    version: 2,
     parent: parentId,
     createdAt: new Date().toISOString(),
     page: pageId,
@@ -374,6 +388,8 @@ export async function explainLine(
     const where = {
       root: parsed?.root,
       locator: root?.locator,
+      // Evidence from a Git root is the commit's, not the folder's as it is now.
+      ...(root?.source === 'git' ? { commit: root.commit } : {}),
       path: parsed?.path,
     };
     if (reference.status === 'unresolved') {

@@ -17,14 +17,20 @@ import {
  * exactly what evidence that view cited. It certifies none of the view's
  * claims: every citation is either resolved to exact preserved bytes or
  * explicitly unresolved, and nothing else is asserted.
+ *
+ * Version 2 is version 1 except that its occurrence and its parent may be of
+ * either version (ADR 0009). Version 1 records stay valid.
  */
 export const STATE_FORMAT = 'sulai.state';
-export const STATE_VERSION = 1;
+
+/** The version new revisions are written in. */
+export const STATE_VERSION = 2;
+export type StateVersion = 1 | 2;
 
 /** Bounds a state page, which is read whole to find its references. */
 export const MAX_STATE_PAGE_BYTES = 1024 * 1024;
 
-export type StateId = `state:v1:${string}`;
+export type StateId = `state:v${StateVersion}:${string}`;
 
 export const UNRESOLVED_REASONS = [
   'unknown-root',
@@ -52,7 +58,7 @@ export type StateReference =
 
 export interface StateRevision {
   readonly format: typeof STATE_FORMAT;
-  readonly version: typeof STATE_VERSION;
+  readonly version: StateVersion;
   readonly parent: StateId | null;
   readonly createdAt: string;
   readonly page: ArtifactId;
@@ -173,8 +179,23 @@ function validate(value: unknown): StateRevision {
     ],
     'State revision',
   );
-  if (input.format !== STATE_FORMAT || input.version !== STATE_VERSION) {
+  if (
+    input.format !== STATE_FORMAT ||
+    (input.version !== 1 && input.version !== 2)
+  ) {
     throw new ValidationError('Unsupported state format or version');
+  }
+  const version: StateVersion = input.version;
+  const parent = input.parent === null ? null : parseStateId(input.parent);
+  const occurrence = parseOccurrenceId(input.occurrence);
+  if (
+    version === 1 &&
+    (!occurrence.startsWith('occurrence:v1:') ||
+      (parent !== null && !parent.startsWith('state:v1:')))
+  ) {
+    throw new ValidationError(
+      'A version 1 state revision names only version 1 records',
+    );
   }
   const references = array(input.references, 'State references').map(
     parseReference,
@@ -187,11 +208,11 @@ function validate(value: unknown): StateRevision {
   }
   return {
     format: STATE_FORMAT,
-    version: STATE_VERSION,
-    parent: input.parent === null ? null : parseStateId(input.parent),
+    version,
+    parent,
     createdAt: timestamp(input.createdAt, 'State createdAt'),
     page: parseArtifactId(input.page),
-    occurrence: parseOccurrenceId(input.occurrence),
+    occurrence,
     references,
   };
 }
@@ -229,15 +250,16 @@ function freeze(revision: StateRevision): StateRevision {
   return Object.freeze(revision);
 }
 
-export function stateIdOf(bytes: Uint8Array): StateId {
+/** The identity of a revision's bytes, which declare the given version. */
+export function stateIdOf(bytes: Uint8Array, version: StateVersion): StateId {
   if (!(bytes instanceof Uint8Array)) {
     throw new ValidationError('State content must be bytes');
   }
-  return `state:v1:${createHash('sha256').update(bytes).digest('hex')}`;
+  return `state:v${version}:${createHash('sha256').update(bytes).digest('hex')}`;
 }
 
 export function parseStateId(value: unknown): StateId {
-  if (typeof value !== 'string' || !/^state:v1:[a-f0-9]{64}$/.test(value)) {
+  if (typeof value !== 'string' || !/^state:v[12]:[a-f0-9]{64}$/.test(value)) {
     throw new ValidationError('Invalid state ID');
   }
   return value as StateId;
@@ -251,7 +273,7 @@ export function encodeStateRevision(value: unknown): {
 } {
   const revision = freeze(validate(value));
   const bytes = serialize(revision);
-  return { id: stateIdOf(bytes), bytes, revision };
+  return { id: stateIdOf(bytes, revision.version), bytes, revision };
 }
 
 /**

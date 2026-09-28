@@ -1,7 +1,8 @@
 # ADR 0009: A Git acquisition records a commit, not a working folder
 
 Status: Accepted. Adds occurrence version 2 and state revision version 2, and raises the storage
-format to version 5.
+format to version 5. Corrected during implementation: the working-tree check turns filter drivers
+off, checks a submodule only by its commit, and does not count the project's own store.
 
 ## Context
 
@@ -82,9 +83,13 @@ it reads. So Sulai never relies on the user's configuration for these, and sets 
 - **No writes.** Optional locks are disabled (`--no-optional-locks`, `GIT_OPTIONAL_LOCKS=0`), so
   checking the working tree does not refresh the index.
 - **No external programs.** `core.fsmonitor` is off, there is no pager, and only plumbing and status
-  commands run, so no hook, filter or textconv program runs.
+  commands run. `status` rehashes a file whose cached details are stale through that file's filter,
+  and the Git LFS filter also writes to the repository, so every configured filter driver is turned
+  off for the check. No hook, filter or textconv program runs.
 - **Explicit flags.** The status check passes its own flags, such as `--untracked-files=all` and
-  `--ignore-submodules=none`, rather than taking them from configuration.
+  `--ignore-submodules=dirty`, rather than taking them from configuration. A submodule counts as
+  changed when a different commit is checked out in it. Its own working tree belongs to another
+  repository, which Sulai never enters; `none` would run Git inside it.
 - **Git's own safety settings stay.** Sulai does not override `safe.directory` or similar.
 
 Sulai checks that the `git` it finds supports these switches, and refuses Git acquisition if it does
@@ -93,7 +98,8 @@ not.
 ### Uncommitted work
 
 Before reading, Sulai asks Git whether the working tree differs from HEAD: staged changes, modified
-tracked files, or untracked files that are not ignored.
+tracked files, or untracked files that are not ignored. The project's own store is not the user's
+work, so its untracked files do not count when it lies inside the working tree.
 
 - **If it differs, the acquisition is refused,** naming how many paths differ, unless the caller
   explicitly asks to capture the commit anyway.

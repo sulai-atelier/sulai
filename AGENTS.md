@@ -32,7 +32,7 @@ documentation, issues, and commits.
   Deriving state pages inside Sulai, semantic extraction, reconciliation, provider
   adapters, and hosted features need separate designs and requests. Do not
   silently expand scope.
-- Storage is at format version 4; change it only when a request calls for it. The
+- Storage is at format version 5; change it only when a request calls for it. The
   experimental Claude Code reader stays as it is: do not extend it or build on it
   without a request.
 - Do not add a notion of who decided or who owns an idea. Accepted state and

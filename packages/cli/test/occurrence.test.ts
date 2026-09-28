@@ -103,7 +103,12 @@ test('a directory acquisition answers which inputs, which bytes, which were new,
   assert.deepEqual(result.skipped, []);
   assert.deepEqual(result.excluded, []);
   assert.deepEqual(result.roots, [
-    { id: 'r1', kind: 'directory', locator: resolve(root) },
+    {
+      id: 'r1',
+      source: 'filesystem',
+      kind: 'directory',
+      locator: resolve(root),
+    },
   ]);
 
   const record = await inspectOccurrence(directory, result.occurrenceId);
@@ -126,6 +131,7 @@ test('a directory acquisition answers which inputs, which bytes, which were new,
   assert.deepEqual(record.roots, [
     {
       id: 'r1',
+      source: 'filesystem',
       kind: 'directory',
       platform: process.platform,
       locator: resolve(root),
@@ -139,7 +145,7 @@ test('a directory acquisition answers which inputs, which bytes, which were new,
   const bytes = await readFile(
     join(directory, '.sulai', 'occurrences', name as string),
   );
-  assert.equal(`occurrence:v1:${name?.slice(0, 64)}`, result.occurrenceId);
+  assert.equal(`occurrence:v2:${name?.slice(0, 64)}`, result.occurrenceId);
   assert.equal(
     createHash('sha256').update(bytes).digest('hex'),
     name?.slice(0, 64),
@@ -199,7 +205,7 @@ test('a single file is a one-entry occurrence at the root itself', async (t) => 
   const result = await importPath(directory, file);
   assert.equal(result.entryCount, 1);
   assert.deepEqual(result.roots, [
-    { id: 'r1', kind: 'file', locator: resolve(file) },
+    { id: 'r1', source: 'filesystem', kind: 'file', locator: resolve(file) },
   ]);
   const record = await inspectOccurrence(directory, result.occurrenceId);
   assert.deepEqual(
@@ -395,7 +401,7 @@ test('inspection refuses a corrupt, non-canonical, or dangling occurrence and st
   const store = join(directory, '.sulai', 'occurrences');
   const file = join(
     store,
-    `${occurrenceId.slice('occurrence:v1:'.length)}.json`,
+    `${occurrenceId.slice('occurrence:v2:'.length)}.json`,
   );
   const original = await readFile(file);
 
@@ -435,7 +441,7 @@ test('inspection refuses a corrupt, non-canonical, or dangling occurrence and st
     const dangling = encodeOccurrence({ ...record, entries: [entry] });
     const danglingName = join(
       store,
-      `${dangling.id.slice('occurrence:v1:'.length)}.json`,
+      `${dangling.id.slice('occurrence:v2:'.length)}.json`,
     );
     await writeFile(danglingName, dangling.bytes);
     await assert.rejects(inspectProject(directory), reason);
@@ -561,9 +567,24 @@ test('one acquisition across several roots is one occurrence, numbered in argume
   const result = await importPaths(directory, [first, second, single]);
   assert.equal(result.status, 'complete');
   assert.deepEqual(result.roots, [
-    { id: 'r1', kind: 'directory', locator: resolve(first) },
-    { id: 'r2', kind: 'directory', locator: resolve(second) },
-    { id: 'r3', kind: 'file', locator: resolve(single) },
+    {
+      id: 'r1',
+      source: 'filesystem',
+      kind: 'directory',
+      locator: resolve(first),
+    },
+    {
+      id: 'r2',
+      source: 'filesystem',
+      kind: 'directory',
+      locator: resolve(second),
+    },
+    {
+      id: 'r3',
+      source: 'filesystem',
+      kind: 'file',
+      locator: resolve(single),
+    },
   ]);
   // Identical bytes under two roots are one artifact and two entries.
   assert.equal(result.entryCount, 5);

@@ -270,11 +270,51 @@ export async function writeImmutable(
   return created;
 }
 
-export interface StagedArtifact {
+/** Bytes written to a synced temporary file, not yet published. */
+export interface Staged {
   readonly temporaryPath: string;
   readonly id: ArtifactId;
   readonly byteLength: number;
+}
+
+export interface StagedArtifact extends Staged {
   readonly modifiedAt: string;
+}
+
+/**
+ * Streams chunks into a new temporary file, hashing as it goes, so the identity
+ * is known once the last byte is written and no more than one chunk is ever in
+ * memory. The file is synced before this returns, and removed if anything
+ * fails, whether writing or reading the chunks.
+ */
+export async function stageChunks(
+  temporaryDirectory: string,
+  chunks: AsyncIterable<Uint8Array>,
+): Promise<Staged> {
+  await prepareTemporaryDirectory(temporaryDirectory);
+  const temporaryPath = join(temporaryDirectory, randomUUID());
+  try {
+    const hash = createHash('sha256');
+    let byteLength = 0;
+    const target = await open(temporaryPath, 'wx', 0o600);
+    try {
+      for await (const chunk of chunks) {
+        hash.update(chunk);
+        await writeAll(target, chunk);
+        byteLength += chunk.byteLength;
+      }
+      await target.sync();
+    } finally {
+      await target.close();
+    }
+    return {
+      temporaryPath,
+      id: parseArtifactId(`sha256:${hash.digest('hex')}`),
+      byteLength,
+    };
+  } catch (error) {
+    throw await cleanupAfterFailure(error, temporaryPath);
+  }
 }
 
 /**
@@ -301,54 +341,35 @@ async function* inputChunks(
 }
 
 /**
- * Streams an open input into a new temporary file, hashing as it goes, so the
- * identity is known once the last byte is written and no more than one chunk is
- * ever in memory. The temporary file is synced before this returns. Failures of
- * the input are `InputUnavailable`; anything else is a failure of the store.
+ * Stages an open input by streaming (see `stageChunks`). Failures of the input
+ * are `InputUnavailable`; anything else is a failure of the store.
  */
 export async function stageFromHandle(
   temporaryDirectory: string,
   source: FileHandle,
 ): Promise<StagedArtifact> {
-  await prepareTemporaryDirectory(temporaryDirectory);
-  const temporaryPath = join(temporaryDirectory, randomUUID());
+  let observed;
   try {
-    let observed;
-    try {
-      observed = await source.stat();
-    } catch (error) {
-      throw new InputUnavailable('unreadable', 'Input could not be read', {
-        cause: error,
-      });
-    }
-    const hash = createHash('sha256');
-    let byteLength = 0;
-    const target = await open(temporaryPath, 'wx', 0o600);
-    try {
-      for await (const chunk of inputChunks(source, observed.size)) {
-        hash.update(chunk);
-        await writeAll(target, chunk);
-        byteLength += chunk.byteLength;
-      }
-      await target.sync();
-    } finally {
-      await target.close();
-    }
-    if (byteLength !== observed.size) {
-      throw new InputUnavailable(
+    observed = await source.stat();
+  } catch (error) {
+    throw new InputUnavailable('unreadable', 'Input could not be read', {
+      cause: error,
+    });
+  }
+  const staged = await stageChunks(
+    temporaryDirectory,
+    inputChunks(source, observed.size),
+  );
+  if (staged.byteLength !== observed.size) {
+    throw await cleanupAfterFailure(
+      new InputUnavailable(
         'changed-during-read',
         'File changed size while it was being read',
-      );
-    }
-    return {
-      temporaryPath,
-      id: parseArtifactId(`sha256:${hash.digest('hex')}`),
-      byteLength,
-      modifiedAt: observed.mtime.toISOString(),
-    };
-  } catch (error) {
-    throw await cleanupAfterFailure(error, temporaryPath);
+      ),
+      staged.temporaryPath,
+    );
   }
+  return { ...staged, modifiedAt: observed.mtime.toISOString() };
 }
 
 export async function stageIntoTemporary(
@@ -370,7 +391,7 @@ export async function stageIntoTemporary(
  * name is refused instead of being reported as a successful duplicate.
  */
 export async function publishArtifact(
-  staged: StagedArtifact,
+  staged: Staged,
   destination: string,
 ): Promise<boolean> {
   try {

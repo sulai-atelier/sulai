@@ -22,6 +22,14 @@ the private report.
 
 The CLI runs locally and does not send data over the network.
 
+**Git capture runs the local `git`, and never lets it fetch or write.** It runs
+only plumbing commands and `status`, with lazy fetching, replacement objects and
+optional locks turned off, `core.fsmonitor` off, no pager, and every configured
+filter driver turned off for the working-tree check. So nothing is fetched, the
+repository is not written, and no hook, filter or fsmonitor program runs. On
+Windows, `git` is found on `PATH` only, never in the current folder. Git's own
+safety settings, such as `safe.directory`, apply as configured.
+
 **Import accepts arbitrary bytes and performs no format validation.** It streams,
 holding at most 1 MiB of an artifact in memory, and has no size ceiling: the limit
 is available disk space. Storing material is not an assertion that it is

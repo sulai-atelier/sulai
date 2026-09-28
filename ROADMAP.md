@@ -20,10 +20,10 @@ The work, in order:
   citations now point at different text. Done:
   [ADR 0008](docs/adr/0008-a-kept-citation-keeps-its-evidence.md).
 - **No state file needed.** A page can be recorded from standard input. Done.
-- **Git-aware capture.** For a Git repository, capture its tracked files at a
-  commit, and record that commit, instead of copying the working folder with its
-  dependencies and build output. This changes what an acquisition record says, so
-  it is designed in an ADR before any code, starting with the committed HEAD.
+- **Git-aware capture.** For a Git repository, `import --git` captures the
+  tracked files of the commit at HEAD, and records that commit, instead of
+  copying the working folder with its dependencies and build output. Done:
+  [ADR 0009](docs/adr/0009-git-acquisition-records-a-commit.md).
 - **The local flow, end to end.** An agent sets up Sulai in an ordinary project,
   keeps its state as it works, and answers from it, with no Sulai concepts
   handed to the person.

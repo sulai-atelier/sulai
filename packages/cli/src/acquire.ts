@@ -1,19 +1,24 @@
 /**
- * Acquisition: checking the roots a caller names, walking them without following
- * links, preserving every input, and recording the attempt as one occurrence.
+ * Acquisition: checking the roots a caller names, walking folders without
+ * following links or reading one commit of a repository, preserving every
+ * input, and recording the attempt as one occurrence.
  */
 import { randomBytes } from 'node:crypto';
 import { lstat, readdir, realpath } from 'node:fs/promises';
 import type { FileHandle } from 'node:fs/promises';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
-import { encodeOccurrence, ValidationError } from '@sulai/core';
+import { GIT_BLOB_MODES, encodeOccurrence, ValidationError } from '@sulai/core';
 import type {
   ArtifactId,
+  GitBlobMode,
   OccurrenceEntry,
   OccurrenceExclusion,
   OccurrenceSkip,
   SkipReason,
+  WorktreeState,
 } from '@sulai/core';
+import { listTree, openCommit, readBlobs, worktreeChanges } from './git.js';
+import type { GitCommit } from './git.js';
 import { occurrencePath } from './occurrences.js';
 import { loadProject } from './project.js';
 import {
@@ -24,10 +29,17 @@ import {
   openRegularFile,
   publishArtifact,
   removeTemporaryFile,
+  stageChunks,
   stageFromHandle,
   writeImmutable,
 } from './store.js';
-import type { StagedArtifact } from './store.js';
+import type { Staged, StagedArtifact } from './store.js';
+
+/**
+ * A root to acquire: the path of a file or a folder, or a Git repository whose
+ * HEAD commit is read rather than its working folder.
+ */
+export type AcquisitionRoot = string | { readonly git: string };
 
 /** Why an input that was listed could not be opened, or null for a real fault. */
 function openFailure(error: unknown): SkipReason | null {
@@ -48,7 +60,7 @@ function listFailure(error: unknown): SkipReason | null {
   return null;
 }
 
-const utf8 = new TextDecoder('utf-8', { fatal: true });
+const utf8 = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
 
 function byUtf8Path(a: { path: string }, b: { path: string }): number {
   return Buffer.compare(
@@ -66,7 +78,11 @@ function isWithin(parent: string, child: string): boolean {
   );
 }
 
-interface CheckedRoot {
+const isBlobMode = (mode: string): mode is GitBlobMode =>
+  (GIT_BLOB_MODES as readonly string[]).includes(mode);
+
+interface FolderRoot {
+  readonly source: 'filesystem';
   readonly id: string;
   readonly kind: 'file' | 'directory';
   readonly locator: string;
@@ -75,20 +91,65 @@ interface CheckedRoot {
   readonly ino: bigint;
 }
 
+interface CommitRoot {
+  readonly source: 'git';
+  readonly id: string;
+  readonly locator: string;
+  readonly commit: GitCommit;
+  readonly dev: bigint;
+  readonly ino: bigint;
+}
+
+type CheckedRoot = FolderRoot | CommitRoot;
+
 const sameDirectory = (
   a: { dev: bigint; ino: bigint },
   b: { dev: bigint; ino: bigint },
 ) => a.ino !== 0n && a.dev === b.dev && a.ino === b.ino;
 
+/** Why two roots cannot be acquired together, or null when they can. */
+function conflict(a: CheckedRoot, b: CheckedRoot): string | null {
+  if (a.source === 'git' && b.source === 'git') {
+    // One repository at two commits, as through two worktrees, is two pieces
+    // of evidence. The same commit twice is an accident.
+    return a.commit.repository === b.commit.repository &&
+      a.commit.commit === b.commit.commit
+      ? 'are the same commit of the same repository'
+      : null;
+  }
+  if (a.source === 'git' || b.source === 'git') {
+    const [commit, folder] = (a.source === 'git' ? [a, b] : [b, a]) as [
+      CommitRoot,
+      FolderRoot,
+    ];
+    const meets =
+      isWithin(commit.commit.folder, folder.real) ||
+      (folder.kind === 'directory' &&
+        isWithin(folder.real, commit.commit.folder));
+    return meets
+      ? "overlap; a folder root cannot lie inside or contain a Git root's repository"
+      : null;
+  }
+  const overlaps =
+    (a.kind === 'directory' && isWithin(a.real, b.real)) ||
+    (b.kind === 'directory' && isWithin(b.real, a.real)) ||
+    (a.kind === 'directory' && b.kind === 'directory' && sameDirectory(a, b)) ||
+    (a.kind === 'file' && b.kind === 'file' && a.real === b.real);
+  return overlaps
+    ? 'overlap; every input must belong to exactly one root'
+    : null;
+}
+
 /**
  * Checks every root before anything is captured, so a root that is missing, a
- * link, not a file or directory, inside the project store, or overlapping
- * another root refuses the whole acquisition and nothing is recorded. The v1
- * record has no way to state that a named root was absent, and an acquisition
- * that silently dropped one would misstate what was chosen.
+ * link, not a file or directory, inside the project store, overlapping another
+ * root, or not a repository with a commit refuses the whole acquisition and
+ * nothing is recorded. The record has no way to state that a named root was
+ * absent, and an acquisition that silently dropped one would misstate what was
+ * chosen.
  */
 async function checkRoots(
-  inputs: readonly string[],
+  inputs: readonly AcquisitionRoot[],
   storePath: string,
 ): Promise<CheckedRoot[]> {
   if (inputs.length === 0) {
@@ -96,9 +157,34 @@ async function checkRoots(
   }
   const roots: CheckedRoot[] = [];
   for (const [index, input] of inputs.entries()) {
-    const locator = resolve(input);
+    const id = `r${index + 1}`;
+    const named =
+      typeof input === 'string'
+        ? input
+        : typeof input === 'object' &&
+            input !== null &&
+            typeof input.git === 'string'
+          ? input.git
+          : null;
+    if (named === null) {
+      throw new ValidationError('Each root is a path, or { git: path }');
+    }
+    const locator = resolve(named);
     if (isWithin(storePath, locator)) {
       throw new ValidationError('Cannot acquire from inside the project store');
+    }
+    if (typeof input !== 'string') {
+      const commit = await openCommit(locator);
+      const stat = await lstat(commit.folder, { bigint: true });
+      roots.push({
+        source: 'git',
+        id,
+        locator,
+        commit,
+        dev: stat.dev,
+        ino: stat.ino,
+      });
+      continue;
     }
     const stat = await lstat(locator, { bigint: true });
     if (stat.isSymbolicLink()) {
@@ -110,7 +196,8 @@ async function checkRoots(
       );
     }
     roots.push({
-      id: `r${index + 1}`,
+      source: 'filesystem',
+      id,
       kind: stat.isFile() ? 'file' : 'directory',
       locator,
       // Compared by real path, so a root reached through a linked ancestor
@@ -120,19 +207,11 @@ async function checkRoots(
       ino: stat.ino,
     });
   }
-  for (const a of roots) {
-    for (const b of roots) {
-      if (a === b) continue;
-      const overlaps =
-        (a.kind === 'directory' && isWithin(a.real, b.real)) ||
-        (a.kind === 'directory' &&
-          b.kind === 'directory' &&
-          sameDirectory(a, b)) ||
-        (a.kind === 'file' && b.kind === 'file' && a.real === b.real);
-      if (overlaps) {
-        throw new ValidationError(
-          `Roots ${a.id} and ${b.id} overlap; every input must belong to exactly one root`,
-        );
+  for (const [index, a] of roots.entries()) {
+    for (const b of roots.slice(index + 1)) {
+      const reason = conflict(a, b);
+      if (reason !== null) {
+        throw new ValidationError(`Roots ${a.id} and ${b.id} ${reason}`);
       }
     }
   }
@@ -140,29 +219,80 @@ async function checkRoots(
 }
 
 /**
- * Preserves files, or every file under directories, from one or more roots and
- * records the attempt as one import occurrence. Roots are numbered `r1`, `r2`
- * and so on in the order given.
+ * Asks Git, for every repository with a working tree, whether it differs from
+ * the commit about to be read. This runs before anything is captured, so a
+ * refusal leaves the store as it was. Refusing is this command's policy, a
+ * fail-safe for a caller that could mistake the commit for its current work;
+ * the record states what was found either way.
+ */
+async function checkWorktrees(
+  roots: readonly CheckedRoot[],
+  storePath: string,
+  allowUncommitted: boolean,
+): Promise<Map<string, WorktreeState>> {
+  const states = new Map<string, WorktreeState>();
+  const store = await realpath(storePath);
+  for (const root of roots) {
+    if (root.source !== 'git') continue;
+    const { commit } = root;
+    if (commit.bare) {
+      states.set(root.id, 'absent');
+      continue;
+    }
+    // The project's own store is not the user's work, even when untracked.
+    const inside = isWithin(commit.folder, store)
+      ? relative(commit.folder, store).split(sep).join('/')
+      : null;
+    const changes = await worktreeChanges(commit, inside);
+    if (changes.length > 0 && !allowUncommitted) {
+      const shown = changes.slice(0, 5).join(', ');
+      const more = changes.length > 5 ? `, and ${changes.length - 5} more` : '';
+      throw new ValidationError(
+        `${root.id} (${root.locator}): the working tree differs from commit ${commit.commit.slice(0, 12)} in ${changes.length} path(s): ${shown}${more}. Commit first, or capture the commit anyway with --allow-uncommitted.`,
+      );
+    }
+    states.set(root.id, changes.length > 0 ? 'differs' : 'clean');
+  }
+  return states;
+}
+
+/**
+ * Preserves files, every file under directories, and the contents of commits,
+ * from one or more roots, and records the attempt as one import occurrence.
+ * Roots are numbered `r1`, `r2` and so on in the order given.
  *
- * Only the named roots are read. Symbolic links and junctions are never
- * followed, and no content is read for references to anything else, so an
- * acquisition never reaches outside what the caller chose. The project's own
- * store is excluded in whichever root contains it. An input that cannot be
- * captured is recorded as skipped with a reason and the rest continues; a
- * failure of the store, or a root that cannot be listed at all, stops the
- * acquisition. Every artifact is published before the occurrence, so an
- * occurrence never names bytes the store does not hold.
+ * A folder root is walked. Only the named roots are read. Symbolic links and
+ * junctions are never followed, and no content is read for references to
+ * anything else, so an acquisition never reaches outside what the caller
+ * chose. The project's own store is excluded in whichever root contains it. An
+ * input that cannot be captured is recorded as skipped with a reason and the
+ * rest continues; a failure of the store, or a root that cannot be listed at
+ * all, stops the acquisition.
  *
- * The walk is not atomic. Inputs that appear during it may be missed, and a
- * complete occurrence means that everything the walk found was captured, not
- * that the result is a snapshot of one instant.
+ * A Git root is read from the repository's objects (ADR 0009): the commit HEAD
+ * names, resolved once, with every tracked path as committed and nothing
+ * untracked or ignored. Each blob is checked against its ID as it is read. If
+ * the working tree differs from that commit, the acquisition is refused unless
+ * `allowUncommitted` is set, and the record says which it was.
+ *
+ * Every artifact is published before the occurrence, so an occurrence never
+ * names bytes the store does not hold. The walk of a folder is not atomic.
+ * Inputs that appear during it may be missed, and a complete occurrence means
+ * that everything the walk found was captured, not that the result is a
+ * snapshot of one instant. A commit does not change, so it is exact.
  */
 export async function importPaths(
   directory: string,
-  inputs: readonly string[],
+  inputs: readonly AcquisitionRoot[],
+  options: { readonly allowUncommitted?: boolean } = {},
 ) {
   const project = await loadProject(directory);
   const roots = await checkRoots(inputs, project.store);
+  const worktrees = await checkWorktrees(
+    roots,
+    project.store,
+    options.allowUncommitted === true,
+  );
   const store = await lstat(project.store, { bigint: true });
   const isStore = (stat: { dev: bigint; ino: bigint }, path: string) =>
     sameDirectory(stat, store) || relative(project.store, path) === '';
@@ -170,7 +300,7 @@ export async function importPaths(
     roots.find(
       (other) =>
         other.id !== root &&
-        other.kind === 'directory' &&
+        (other.source === 'git' || other.kind === 'directory') &&
         sameDirectory(stat, other),
     );
 
@@ -180,6 +310,23 @@ export async function importPaths(
   const skipped: OccurrenceSkip[] = [];
   const excluded: OccurrenceExclusion[] = [];
   const isNew = new Map<ArtifactId, boolean>();
+
+  async function publish(staged: Staged): Promise<void> {
+    let created: boolean;
+    try {
+      created = await publishArtifact(
+        staged,
+        artifactPath(project.artifacts, staged.id),
+      );
+    } catch (error) {
+      throw await cleanupAfterFailure(error, staged.temporaryPath);
+    }
+    await removeTemporaryFile(staged.temporaryPath);
+    // The first capture of these bytes in this acquisition decides whether the
+    // acquisition added them; a later duplicate, under any root, did not find
+    // them already there.
+    isNew.set(staged.id, isNew.get(staged.id) ?? created);
+  }
 
   async function capture(
     root: string,
@@ -205,28 +352,14 @@ export async function importPaths(
     } finally {
       await source.close();
     }
-    let created: boolean;
-    try {
-      created = await publishArtifact(
-        staged,
-        artifactPath(project.artifacts, staged.id),
-      );
-    } catch (error) {
-      throw await cleanupAfterFailure(error, staged.temporaryPath);
-    }
-    await removeTemporaryFile(staged.temporaryPath);
-    // The first capture of these bytes in this acquisition decides whether the
-    // acquisition added them; a later duplicate, under any root, did not find
-    // them already there.
-    const added = isNew.get(staged.id) ?? created;
-    isNew.set(staged.id, added);
+    await publish(staged);
     entries.push({
       root,
       path,
       artifact: staged.id,
       byteLength: staged.byteLength,
       modifiedAt: staged.modifiedAt,
-      new: added,
+      new: isNew.get(staged.id) as boolean,
     });
   }
 
@@ -292,8 +425,70 @@ export async function importPaths(
     }
   }
 
+  /**
+   * Reads every path in the commit's tree. A submodule names another
+   * repository's commit and is excluded; every blob, a symbolic link's target
+   * included, is preserved as its bytes. Each distinct blob is read once.
+   */
+  async function read(root: CommitRoot): Promise<void> {
+    const blobs: { path: string; mode: GitBlobMode; blob: string }[] = [];
+    for (const item of await listTree(root.commit)) {
+      let path: string;
+      try {
+        path = utf8.decode(item.path);
+      } catch {
+        const lossy = item.path.toString('utf8');
+        skipped.push({ root: root.id, path: lossy, reason: 'non-utf8-name' });
+        continue;
+      }
+      if (
+        path
+          .split('/')
+          .some((part) => part === '' || part === '.' || part === '..')
+      ) {
+        throw new ValidationError(
+          `${root.id}: the commit holds a path that cannot be recorded: ${path}`,
+        );
+      }
+      if (item.mode === '160000' && item.type === 'commit') {
+        excluded.push({
+          root: root.id,
+          path,
+          reason: 'submodule',
+          commit: item.id,
+        });
+      } else if (item.type === 'blob' && isBlobMode(item.mode)) {
+        blobs.push({ path, mode: item.mode, blob: item.id });
+      } else {
+        throw new ValidationError(
+          `${root.id}: the commit holds a ${item.type} with mode ${item.mode} at ${path}, which cannot be read`,
+        );
+      }
+    }
+    const captured = new Map<string, Staged>();
+    const distinct = [...new Set(blobs.map((item) => item.blob))];
+    for await (const blob of readBlobs(root.commit, distinct)) {
+      const staged = await stageChunks(project.temporary, blob.chunks);
+      await publish(staged);
+      captured.set(blob.id, staged);
+    }
+    for (const item of blobs) {
+      const staged = captured.get(item.blob) as Staged;
+      entries.push({
+        root: root.id,
+        path: item.path,
+        artifact: staged.id,
+        byteLength: staged.byteLength,
+        mode: item.mode,
+        blob: item.blob,
+        new: isNew.get(staged.id) as boolean,
+      });
+    }
+  }
+
   for (const root of roots) {
-    if (root.kind === 'file') await capture(root.id, root.locator, '');
+    if (root.source === 'git') await read(root);
+    else if (root.kind === 'file') await capture(root.id, root.locator, '');
     else await walk(root.id, root.locator, '');
   }
 
@@ -307,17 +502,31 @@ export async function importPaths(
   excluded.sort(byRootThenPath);
   const { id, bytes, occurrence } = encodeOccurrence({
     format: 'sulai.occurrence',
-    version: 1,
+    version: 2,
     nonce,
     startedAt,
     finishedAt: new Date().toISOString(),
     status: skipped.length === 0 ? 'complete' : 'partial',
-    roots: roots.map((root) => ({
-      id: root.id,
-      kind: root.kind,
-      platform: process.platform,
-      locator: root.locator,
-    })),
+    roots: roots.map((root) =>
+      root.source === 'git'
+        ? {
+            id: root.id,
+            source: 'git',
+            objectFormat: root.commit.objectFormat,
+            commit: root.commit.commit,
+            tree: root.commit.tree,
+            worktree: worktrees.get(root.id),
+            platform: process.platform,
+            locator: root.locator,
+          }
+        : {
+            id: root.id,
+            source: 'filesystem',
+            kind: root.kind,
+            platform: process.platform,
+            locator: root.locator,
+          },
+    ),
     entries,
     skipped,
     excluded,
@@ -333,28 +542,35 @@ export async function importPaths(
   return {
     occurrenceId: id,
     status: occurrence.status,
-    roots: roots.map(({ id: root, kind, locator }) => ({
-      id: root,
-      kind,
-      locator,
-    })),
+    roots: occurrence.roots.map((root) =>
+      root.source === 'git'
+        ? {
+            id: root.id,
+            source: root.source,
+            locator: root.locator,
+            commit: root.commit,
+            worktree: root.worktree,
+          }
+        : {
+            id: root.id,
+            source: 'filesystem',
+            kind: root.kind,
+            locator: root.locator,
+          },
+    ),
     entryCount: occurrence.entries.length,
     newArtifacts: distinct.filter(Boolean).length,
     existingArtifacts: distinct.filter((added) => !added).length,
-    skipped: occurrence.skipped.map(({ root, path, reason }) => ({
-      root,
-      path,
-      reason,
-    })),
-    excluded: occurrence.excluded.map(({ root, path, reason }) => ({
-      root,
-      path,
-      reason,
-    })),
+    skipped: occurrence.skipped.map((item) => ({ ...item })),
+    excluded: occurrence.excluded.map((item) => ({ ...item })),
   };
 }
 
 /** One root; see `importPaths`. */
-export function importPath(directory: string, input: string) {
-  return importPaths(directory, [input]);
+export function importPath(
+  directory: string,
+  input: AcquisitionRoot,
+  options: { readonly allowUncommitted?: boolean } = {},
+) {
+  return importPaths(directory, [input], options);
 }
