@@ -3,10 +3,11 @@
 Sulai tracks how projects that people and AI systems work on together evolve.
 This repository is an early foundation for infrastructure, not a generic chat app.
 
-Read [docs/principles.md](docs/principles.md) for the canonical product invariants,
-[CONTRIBUTING.md](CONTRIBUTING.md) for review and public-documentation rules, and
-[GOVERNANCE.md](GOVERNANCE.md) for decision authority and history policy before
-making changes. Apply those rules to code, documentation, issues, and commits.
+Before making changes, read [docs/architecture.md](docs/architecture.md) for how the
+pieces fit, [docs/principles.md](docs/principles.md) for the design requirements,
+[CONTRIBUTING.md](CONTRIBUTING.md) for review and documentation rules, and
+[GOVERNANCE.md](GOVERNANCE.md) for decision authority. Apply those rules to code,
+documentation, issues, and commits.
 
 ## Working rules
 
@@ -20,12 +21,12 @@ making changes. Apply those rules to code, documentation, issues, and commits.
 - Test observable invariants, including malformed input and exact byte round trips.
   Use synthetic fixtures only; never commit real conversation exports or secrets.
 - Keep docs, names, comments, and commits concise and suitable for public review.
-  Do not put private planning or conversations in the repository. Record accepted
-  architectural decisions in ADRs, not unresolved research. Avoid speculative abstractions.
-- Scope this foundation to source artifacts, references, import occurrences, state
-  revisions, and the local CLI commands. Acquisition reads only the roots a user
-  names: never follow links, and never acquire a path because content refers to
-  it. See [ADR 0005](docs/adr/0005-import-occurrences-record-acquisition-events.md).
+  Record accepted architectural decisions in ADRs, not unresolved research. Avoid
+  speculative abstractions.
+- Scope work to source artifacts, references, import occurrences, state revisions,
+  and the local CLI commands. Acquisition reads only the roots a user names: never
+  follow links, and never acquire a path because content refers to it. See
+  [ADR 0005](docs/adr/0005-import-occurrences-record-acquisition-events.md).
   A state revision records a page and what it cites; it never certifies the page.
   See [ADR 0007](docs/adr/0007-state-revisions-record-a-view-and-its-evidence.md).
   Deriving state pages inside Sulai, semantic extraction, reconciliation, provider
@@ -38,15 +39,11 @@ making changes. Apply those rules to code, documentation, issues, and commits.
   explicit acceptance were retired; see
   [ADR 0002](docs/adr/0002-source-meaning-state-separation.md).
 - Storage never depends on an artifact format. Import preserves exact bytes and
-  validates nothing; inspection verifies identity and parses nothing;
+  validates nothing; inspection verifies identity and interprets no artifact;
   interpretation is separate and may fail without affecting what was preserved.
   Do not reintroduce format knowledge into the storage or identity layer. See
   [ADR 0003](docs/adr/0003-storage-is-independent-of-artifact-format.md).
 - Before handoff, run `npm run format`, `npm run lint`, `npm run typecheck`, and
   `npm test`; inspect the diff and report results and remaining limitations.
-- Do not describe this foundation as production-ready. Keep commits focused when
-  commits are requested; do not publish packages or deploy without authorization.
-- Verify the intended author, committer, and authenticated account before committing
-  or pushing. Git authentication does not determine commit authorship.
-- Inspect remote history before pushing. A history rewrite or visibility change
-  requires explicit authorization; never infer it from a request to edit files.
+- Do not describe this foundation as production-ready. Do not publish packages,
+  and do not rewrite published history.

@@ -1,12 +1,12 @@
-name: Importer request
-description: Describe a source format and its preservation requirements.
-labels: [enhancement, importer]
+name: Source format request
+description: Describe a source format Sulai could read, and what preserving it requires.
+labels: [enhancement]
 body:
   - type: markdown
     attributes:
       value: |
         Do not upload real provider exports, attachments, or conversation histories.
-        Link public format documentation or describe a synthetic example. A request does not commit the project to an adapter.
+        Link public format documentation or describe a synthetic example. A request does not commit the project to building a reader.
   - type: input
     id: provider
     attributes:
@@ -18,7 +18,7 @@ body:
     id: workflow
     attributes:
       label: Workflow and available documentation
-      description: What needs importing, and what public documentation describes the source?
+      description: What material would be read, and what public documentation describes it?
     validations:
       required: true
   - type: textarea

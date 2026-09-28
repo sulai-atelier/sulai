@@ -2,7 +2,7 @@
   "name": "sulai",
   "version": "0.0.0",
   "private": true,
-  "description": "Traceable source foundations for evolving human and AI project state.",
+  "description": "Open-source version control for human + AI thinking.",
   "repository": {
     "type": "git",
     "url": "https://github.com/sulai-atelier/sulai.git"

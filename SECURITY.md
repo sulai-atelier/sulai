@@ -34,8 +34,8 @@ recursively, but never follows symbolic links or junctions and never reads conte
 looking for references. There is no discovery of related locations. A file
 mentioned by the material you import is not acquired unless it lies under a path
 you named, so importing a session that once read a credential file does not copy
-that file. Links, unreadable and special files
-are recorded as skipped, with a reason, and are not captured.
+that file. Links, unreadable and special files are recorded as skipped, with a
+reason, and are not captured.
 
 **Occurrence records contain the absolute path of each acquisition root,** which
 can reveal user and directory names. Treat a `.sulai` directory as being as private
@@ -44,15 +44,16 @@ as the material in it.
 A file that changes size while it is being read is not captured: it is recorded as
 skipped (`changed-during-read`) and the import reports a partial acquisition. That
 detects growth and truncation only; an in-place overwrite at the same length is not
-detected, so do not rely on capturing a file another process is still writing. Stored content integrity
-does not depend on that check, because it is verified by SHA-256.
+detected, so do not rely on capturing a file another process is still writing.
+Stored content integrity does not depend on that check, because it is verified by
+SHA-256.
 
 `interpret` is the only stable command that reads imported content through a
 format. It uses only the versioned synthetic conversation format, which limits
-input to 1 MiB and 10,000 messages and rejects malformed references. Its output is JSON **including source content**, so
-treat captured stdout as potentially sensitive. `inspect` verifies identity and
-never emits stored content, though inspecting an occurrence prints its paths and
-root locations.
+input to 1 MiB and 10,000 messages and rejects malformed references. Its output
+is JSON **including source content**, so treat captured stdout as potentially
+sensitive. `inspect` verifies identity and never emits stored content, though
+inspecting an occurrence prints its paths and root locations.
 
 `status` prints state pages, and `why` prints the **exact evidence bytes** a page
 cites, up to 1 MiB per reference, so treat their output as being as sensitive as
@@ -73,7 +74,7 @@ links at checked storage directories and input files, but is not a sandbox again
 a malicious process modifying ancestor paths or files concurrently. Users with
 filesystem access can still alter or delete data. There is no encryption,
 authentication, access-control layer, backup service, or guarantee of durability
-across power loss. See [storage limits](docs/source-format.md#local-storage).
+across power loss. See [storage limits](docs/format.md#local-storage).
 
 Use synthetic data while evaluating this foundation. Do not treat the local store
 as the sole copy of valuable material.

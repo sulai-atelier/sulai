@@ -1,12 +1,14 @@
-# Source and local storage format
+# Format specification
 
-This is the initial format, not a compatibility promise for real provider exports.
-All committed fixture data is synthetic.
+This document defines Sulai's records and its local storage, format version 4. It
+is pre-alpha: the format may change, and projects in older versions are refused
+rather than migrated. The [architecture overview](architecture.md) explains how
+the pieces fit together. All committed fixture data is synthetic.
 
 ## Artifacts and source references
 
 `Artifact` stores exact bytes, exposes their `byteLength` and ID, and returns copies
-through `bytes()`. It can represent arbitrary bytes; the conversation importer
+through `bytes()`. It can represent arbitrary bytes; the conversation interpreter
 applies the more restrictive validation below. Neither filenames nor import times
 are identity fields.
 
@@ -75,7 +77,7 @@ surrounding whitespace, excluding its LF or CRLF delimiter. The header and all
 delimiters remain in the artifact even though they have no message unit.
 
 Decoded `content` is a parser view. A raw substring such as `\u0061` occupies six
-source bytes even though it decodes to `a`. This importer does not map arbitrary
+source bytes even though it decodes to `a`. This interpreter does not map arbitrary
 decoded substrings back through JSON escapes. A caller can cite the full message
 unit or explicitly select a byte span from its raw record.
 
@@ -161,7 +163,7 @@ disk space rather than memory. A format limit such as the conversation format's
 [ADR 0004](adr/0004-streaming-preservation-without-a-storage-ceiling.md).
 
 There is no mutable artifact index: inspection enumerates sorted artifact names
-and checks their hashes. It parses nothing and reconstructs no parser view, so a
+and checks their hashes. It interprets no artifact and reconstructs no parser view, so a
 store holding material that no reader understands still verifies cleanly. An
 unexpected store entry or a corrupt artifact causes inspection to fail. Integrity
 is the SHA-256 identity, so corruption that leaves the length unchanged is still

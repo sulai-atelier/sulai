@@ -47,7 +47,7 @@ UTF-8.
 bytes>`. It holds `parent` (or null), `createdAt`, `page`, `occurrence`, and `references` in page
 order, each with its `locator` and `status`, plus `artifact`, `startByte` and `endByte` when
 resolved, or `reason` when not. It holds no confidence, actor, acceptance, model metadata or semantic
-links. The exact encoding is in [the source format](../source-format.md#state-revisions).
+links. The exact encoding is in [the format specification](../format.md#state-revisions).
 
 **Reading:**
 

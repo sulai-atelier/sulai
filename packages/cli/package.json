@@ -2,7 +2,7 @@
   "name": "@sulai/cli",
   "version": "0.0.0",
   "private": true,
-  "description": "Local initialization, source import, and inspection for Sulai.",
+  "description": "The sulai command: preserve evidence locally, and record, inspect, and compare project state.",
   "repository": {
     "type": "git",
     "url": "https://github.com/sulai-atelier/sulai.git",

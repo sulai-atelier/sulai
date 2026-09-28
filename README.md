@@ -1,163 +1,138 @@
 # Sulai
 
+[![CI](https://github.com/sulai-atelier/sulai/actions/workflows/ci.yml/badge.svg)](https://github.com/sulai-atelier/sulai/actions/workflows/ci.yml)
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+
 Open-source version control for human + AI thinking.
 
-AI-assisted work is spread across conversations, models, documents, and people.
+Work on a project is spread across people, AI conversations, documents, and code.
 Copying context between them loses history: what changed, where a claim came from,
-what is still open, and how the project came to stand where it does.
+what is still open, and how the project came to stand where it does. The
+conversations are temporary; the project is not.
 
-Sulai is being built to preserve that history and turn fragmented work into a
-traceable, versioned project state. The project, not the chat, is the durable unit.
+Sulai gives the project a durable, local history. It preserves the original
+evidence exactly, and records versioned views of where the project stands, with
+every citation on them resolved to the exact bytes it points at. It checks the
+pointer, never the claim: it records what a view cites, and does not decide
+whether the view is right.
 
 ## Status
 
-Sulai is pre-alpha. The repository implements the source-preservation foundation:
-immutable content-addressed artifacts, byte-precise source references,
-format-independent integrity-checked local storage, and import occurrences that
-record each acquisition as its own event, including several roots at once. Storage
-accepts exact bytes of any kind; reading them through a format is a separate, named
-operation. The only stable reader is a synthetic conversation format. An
-experimental reader for Claude Code local session transcripts also ships, in its
-own package and behind an `experimental` command (see below).
+Pre-alpha. Formats and APIs will change, and nothing here is production-ready.
 
-Above that foundation, Sulai records **state revisions**: a page saying where a
-project stands, with each reference on it resolved to exact preserved bytes or
-marked unresolved. Sulai checks the pointer, never the claim. It does not write the
-page or judge it. Storage is at format version 4.
+What works:
 
-The APIs and project format are evolving. This is not a production-ready release.
+- exact, content-addressed preservation of any files, with no size ceiling
+- a record of each acquisition: what was read, what each input became, and what
+  could not be captured and why
+- several files or directories imported as one acquisition, without following links
+- versioned state pages whose citations resolve to exact preserved bytes
+- `status`, `why` and `diff` over those pages
+- integrity checks from each state revision down to the bytes it cites
 
-## Principles
+Not built yet:
 
-- Preserve original source; keep everything derived from it traceable to it.
-- Track how the project evolves, not who owned each thought. Human and AI
-  reasoning mix, and Sulai does not try to split them.
-- Do not judge truth. Project state is what Sulai can reconstruct from evidence,
-  not an objective verdict; consensus is not evidentiary support.
-- Preserve history, including superseded work, unresolved conflicts, and
-  uncertainty.
-- Cost users less effort than the coordination it saves them.
-- Remain model-neutral, portable, and independent of hidden model chain-of-thought.
+- writing or updating state pages automatically
+- joining divergent state histories
+- integrations with AI providers or tools, beyond one experimental reader
+- sync, hosting, or collaboration
 
-The [project principles](docs/principles.md) define these requirements in full.
+Everything runs locally. The CLI sends nothing over the network.
 
-## Direction
+## Quick start
 
-Sulai is being developed so that a project worked on across people, models,
-tools, documents, and code stays understandable and continuable: where it stands
-now, what is open, what changed, where its sources diverge, and the evidence for
-each.
-
-A pilot on Sulai's own development asked whether a small, evidence-backed picture
-of where a project stands can be rebuilt from its observable work. It passed on
-that one project. State revisions were then built to record such a picture:
-`sulai status` shows where a project stands, `sulai why` the exact evidence behind
-one line, and `sulai diff` how the page changed. See
-[ADR 0007](docs/adr/0007-state-revisions-record-a-view-and-its-evidence.md).
-
-Internal trials since then, each with its evaluation fixed in advance, changed the
-direction:
-
-- **A citation that resolves is not a citation that supports its line.** Sulai
-  checks the pointer; whoever writes the page still has to check the claim.
-- **State should be maintained, not regenerated.** A page rewritten from scratch
-  on the same evidence reworded most of its lines, so `diff` showed change where
-  there was none. A page updated from its previous revision did not.
-- **State should be read when a task needs it.** On self-contained code tasks,
-  handing an agent the state page gave no benefit.
-- **The current format has two known limits.** A fork never rejoins, because a
-  revision has one parent. A citation recorded against a new acquisition can point
-  at different bytes if the file was edited above the cited lines.
-
-The current work is using Sulai on real projects, not adding schema or adapters.
-What gets built next depends on what that use shows. These trials cover one
-project and are not evidence that the approach works in general.
-
-Earlier versions of this README named provider adapters as the next focus. A
-second source remains important, through official provider exports, but it is no
-longer next. See the [public roadmap](ROADMAP.md) for the sequence and what
-changed.
-
-## Try the current foundation
-
-Use Node.js 24.21.0 or a later 24.x release and npm 11. The repository pins the
-development runtime in `.node-version`.
+Sulai needs Node.js 24.21 or a later 24.x release, and npm 11.
 
 ```sh
 npm ci --ignore-scripts
 npm run build
+```
+
+Create a project and preserve some evidence:
+
+```sh
 npm run cli -- init .tmp/example
 npm run cli -- import .tmp/example fixtures/synthetic.conversation.jsonl
+```
+
+`import` prints an occurrence, the record of that acquisition, with its ID. Next,
+write a page saying where the project stands. It cites evidence as code spans:
+`r1#L2` is line 2 of the occurrence's first root.
+
+```sh
+printf '# State\n- The first message names the project `r1#L2`\n' > .tmp/STATE.md
+npm run cli -- state record .tmp/example .tmp/STATE.md --from OCCURRENCE_ID
+npm run cli -- status .tmp/example
+npm run cli -- why .tmp/example STATE_ID 2
 npm run cli -- inspect .tmp/example
 ```
 
-The import prints an occurrence: the record of that acquisition, with how many
-inputs it captured, how many of their byte sequences were new to the store, and
-anything it could not capture. `import` also takes directories, and several paths
-at once as one acquisition; it walks them without following links. `inspect` verifies every stored artifact and occurrence
-without parsing any artifact, and lists the artifact IDs. To read the artifact
-through the conversation format, and see its decoded messages, source units and
-exact raw records, substitute its ID for `ARTIFACT_ID`:
+`why` prints the exact bytes behind line 2 of the page. `inspect` verifies every
+artifact, occurrence and state revision against its identity. Commands print JSON
+and exit with status 1 on failure; an import that could not capture every input
+still records what it did and exits with status 3. `npm run cli -- --help` lists
+every command.
 
-```sh
-npm run cli -- interpret .tmp/example ARTIFACT_ID
-```
+## How it works
 
-To record where the project stands, write a page, say `.tmp/STATE.md`, whose lines
-cite evidence as code spans such as `r1#L2`: line 2 of the occurrence's first root.
-Record it against the occurrence the import printed, then read it back:
+Sulai keeps three kinds of record, each identified by the SHA-256 of its bytes and
+never rewritten:
 
-```sh
-npm run cli -- state record .tmp/example .tmp/STATE.md --from OCCURRENCE_ID
-npm run cli -- status .tmp/example
-npm run cli -- why .tmp/example STATE_ID 1
-```
+| Record             | What it holds                                                                                                        |
+| ------------------ | -------------------------------------------------------------------------------------------------------------------- |
+| **Artifact**       | exact bytes, stored once however often they are imported                                                             |
+| **Occurrence**     | one acquisition: the roots it read, the artifact each input became, and what it could not capture and why            |
+| **State revision** | a page saying where the project stands, its parent, and every citation resolved to a byte range or marked unresolved |
 
-**Import preserves; it does not interpret.** Storing exact bytes performs no
-format validation, so material that no current reader understands is still kept
-faithfully and a later reader can re-derive from the untouched original. That is
-why `interpret` is a separate command, and why it can fail on bytes that were
-stored successfully without affecting them. See
-[ADR 0003](docs/adr/0003-storage-is-independent-of-artifact-format.md).
+Preservation and interpretation are separate. `import` stores bytes without
+reading them through any format, so material no current reader understands is
+still kept exactly, and a later reader can derive from the original. Reading an
+artifact as a conversation is a separate command, `interpret`, whose only stable
+format today is a documented synthetic one.
 
-Commands emit JSON; failures go to stderr with exit code 1. An import that could
-not capture everything still records what it did and exits with code 3. Reimporting
-identical bytes reuses the artifact and records a new occurrence. Initialization
-and import never replace existing stored content. Inspection checks the stored
-content against its identity. See
-[ADR 0005](docs/adr/0005-import-occurrences-record-acquisition-events.md).
+The [architecture overview](docs/architecture.md) explains the model and its
+boundaries. The [format specification](docs/format.md) defines every record.
 
-Storage accepts any bytes. The only stable **interpreter** is the documented
-[synthetic conversation format](docs/source-format.md), exercised by
-[the synthetic fixture](fixtures/synthetic.conversation.jsonl). No data is sent to
-a model or external service by the CLI.
+## Principles
 
-`sulai experimental claude-code-session <directory> <artifact-id>` reads a stored
-Claude Code local session transcript and reports its structure only, never its
-message text. That file layout is another product's internal detail, not a
-published format, so the command is unstable and may be removed. See
-[its package README](packages/experimental-claude-code/README.md).
+- Preserve original source, and keep everything derived from it traceable to it.
+- Track how the project evolves, not who owned each thought. Human and AI
+  reasoning mix, and Sulai does not try to split them.
+- Do not judge truth. A state page is a recorded view, not a verdict.
+- Keep history, including superseded work, conflicts and open questions.
+- Cost less than it saves: never make people classify, approve or tag material
+  by hand.
 
-## Architecture and specifications
+The [project principles](docs/principles.md) define these in full.
 
-The core library lives in `packages/core`; local persistence and the CLI live in
-`packages/cli`. The experimental Claude Code reader lives in
-`packages/experimental-claude-code`; the CLI depends on it, and core cannot import
-it. None has third-party runtime dependencies. Packages are not published to npm
-yet.
+## Known limitations
 
-[Source identity and storage conventions](docs/source-format.md) describe the
-current format. The [ADRs](docs/adr/) record the decisions to preserve immutable
-raw artifacts, keep storage independent of artifact format, stream preservation,
-record each acquisition as an occurrence, and record state revisions against it.
-ADR 0002 separated source, derived meaning, and accepted state; its accepted-state
-layer has since been retired, as the ADR records.
+- A state history that forks never rejoins, because a revision has one parent.
+- A citation carried forward to a new acquisition can point at different bytes if
+  its file changed above the cited lines.
+- A citation that resolves shows what a line points at, not that the line is right.
+- People and agents write state pages; Sulai records and checks them.
+
+## Documentation
+
+- [Architecture](docs/architecture.md): records, boundaries and code layout
+- [Format specification](docs/format.md): the exact encoding of every record
+- [Principles](docs/principles.md): the design requirements
+- [Decision records](docs/adr/): why the design is the way it is
+- [Roadmap](ROADMAP.md): what is being worked on and what waits
+
+## Experimental
+
+`sulai experimental claude-code-session` reports the structure of a stored Claude
+Code session transcript, never its message text. That file layout is another
+product's internal detail, not a published format, so the command is unstable and
+may be removed. See [its README](packages/experimental-claude-code/README.md).
 
 ## Contributing
 
 Focused contributions, bug reports, synthetic test cases, and technical discussion
 are welcome. Changes affecting persistent formats, provenance, or project-state
-semantics require deliberate review.
+semantics need discussion first.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for setup and review expectations,
 [GOVERNANCE.md](GOVERNANCE.md) for decision-making, and the

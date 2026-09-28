@@ -22,7 +22,7 @@ must produce new artifacts; supersession cannot rewrite old ones.
 
 Source units and spans use nonempty, half-open byte ranges in the artifact. Their
 versioned identities bind the range to its parent. The precise encoding and
-coordinate conventions are specified in [the format document](../source-format.md).
+coordinate conventions are specified in [the format document](../format.md).
 
 ## Consequences
 

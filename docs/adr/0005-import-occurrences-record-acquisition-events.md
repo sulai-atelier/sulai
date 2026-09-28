@@ -29,7 +29,7 @@ stored, and which could not be captured and why.
 It is stored as `.sulai/occurrences/<sha256>.json`. Its identity is `occurrence:v1:` followed by the
 SHA-256 of its exact bytes. The encoding is canonical, one compact JSON line with a fixed field order,
 and a record that is not byte-for-byte canonical is refused. Publication uses the same hard-link,
-never-replace protocol as artifacts. [The format](../source-format.md#import-occurrences) lists every
+never-replace protocol as artifacts. [The format](../format.md#import-occurrences) lists every
 field and rule.
 
 **A random nonce makes each acquisition its own event.** Acquiring unchanged bytes twice, even in the

@@ -2,7 +2,7 @@
   "name": "@sulai/core",
   "version": "0.0.0",
   "private": true,
-  "description": "Immutable source artifacts and exact source references for Sulai.",
+  "description": "Sulai records and identities: artifacts, source references, occurrences, and state revisions.",
   "repository": {
     "type": "git",
     "url": "https://github.com/sulai-atelier/sulai.git",

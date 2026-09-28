@@ -8,7 +8,7 @@ Participation follows the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## Start with the problem
 
-Use the issue templates for bugs, design proposals, and importer requests.
+Use the issue templates for bugs, design proposals, and source format requests.
 For exploratory questions, use
 [Discussions](https://github.com/sulai-atelier/sulai/discussions). Check for an
 existing discussion before opening another. Security reports belong in the

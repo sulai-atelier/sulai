@@ -47,8 +47,9 @@ are observations, not verdicts.
 Supersession and rejection do not erase history. Genuine conflicts may remain
 unresolved; the system must not manufacture agreement to produce a cleaner result.
 An open or uncertain question is valid project state, not a defect. Sulai must not
-require people to settle a question so that it can proceed. A merge must expose
-proposed changes and their provenance for review.
+require people to settle a question so that it can proceed. Any future operation that
+reconciles divergent project state must expose proposed changes and their
+provenance for review.
 
 ## Make project state reconstructable
 
@@ -78,7 +79,6 @@ not private model reasoning.
 Until 2026-09-27 these principles also required that accepted project state record
 explicit acceptance and that authority be kept explicit, distinguishing proposed
 from accepted changes. That model was retired; see
-[ADR 0002](adr/0002-source-meaning-state-separation.md) and the
-[roadmap](../ROADMAP.md#earlier-sequence).
+[ADR 0002](adr/0002-source-meaning-state-separation.md).
 
 The [foundational ADRs](adr/) apply these principles to the initial source model.
