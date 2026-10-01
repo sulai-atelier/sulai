@@ -42,6 +42,13 @@ Current contribution terms are documented in [CONTRIBUTING.md](CONTRIBUTING.md).
 Changes to licensing or contribution requirements need an explicit maintainer
 decision and must be documented before affected contributions are accepted.
 
+## License commitment
+
+The Sulai primitive (its formats, specifications, and reference implementation in
+`packages/core` and `packages/cli`) stays under Apache-2.0, including all future
+versions. [ADR 0010](docs/adr/0010-the-primitive-stays-apache-2.0.md) defines what
+the primitive includes and what it leaves out.
+
 ## Project identity
 
 The Sulai name and project identity identify the official Sulai project. Modified
