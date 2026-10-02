@@ -46,8 +46,9 @@ decision and must be documented before affected contributions are accepted.
 
 The Sulai primitive (its formats, specifications, and reference implementation in
 `packages/core` and `packages/cli`) stays under Apache-2.0, including all future
-versions. [ADR 0010](docs/adr/0010-the-primitive-stays-apache-2.0.md) defines what
-the primitive includes and what it leaves out.
+versions. Hosted and commercial layers built above it are outside this commitment.
+[ADR 0010](docs/adr/0010-the-primitive-stays-apache-2.0.md) defines what the
+primitive includes and what it leaves out.
 
 ## Project identity
 
