@@ -3,6 +3,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import {
+  chmod,
   mkdir,
   mkdtemp,
   readFile,
@@ -249,6 +250,89 @@ test(
       { root: 'r1', path: 'module', reason: 'submodule', commit: gitlink },
       { root: 'r1', path: 'nested', reason: 'nested-repository' },
     ]);
+  },
+);
+
+test(
+  'an untracked file that vanishes after Git listed it is skipped, so the occurrence is partial',
+  {
+    skip:
+      skip ||
+      (process.platform === 'win32' &&
+        'Windows finds only git.exe on PATH, so the race cannot be staged'),
+  },
+  async (t) => {
+    const { base, directory } = await setup(t);
+    const repo = await repository(base, { 'a.txt': 'a\n' });
+    await tree(repo, {
+      'gone.txt': 'listed, then removed\n',
+      'moved/inside.txt': 'listed, then its folder became a file\n',
+    });
+    // A git that, right after listing untracked files, removes one and turns
+    // the folder of another into a file: the race, made certain.
+    const real = execFileSync('sh', ['-c', 'command -v git'], {
+      encoding: 'utf8',
+    }).trim();
+    await tree(base, {
+      'bin/git': [
+        '#!/bin/sh',
+        '"$SULAI_TEST_GIT" "$@"',
+        'status=$?',
+        'case " $* " in',
+        '  *" --others "*) rm -rf "$SULAI_TEST_REPO/gone.txt" "$SULAI_TEST_REPO/moved"; printf x > "$SULAI_TEST_REPO/moved" ;;',
+        'esac',
+        'exit $status',
+        '',
+      ].join('\n'),
+    });
+    await chmod(join(base, 'bin', 'git'), 0o755);
+    const saved = process.env.PATH;
+    Object.assign(process.env, {
+      PATH: `${join(base, 'bin')}:${saved}`,
+      SULAI_TEST_GIT: real,
+      SULAI_TEST_REPO: repo,
+    });
+    t.after(() => {
+      process.env.PATH = saved;
+      delete process.env.SULAI_TEST_GIT;
+      delete process.env.SULAI_TEST_REPO;
+    });
+
+    const result = await importPaths(directory, [{ worktree: repo }]);
+    assert.equal(result.status, 'partial');
+    const record = await inspectOccurrence(directory, result.occurrenceId);
+    assert.deepEqual(
+      record.entries.map((entry) => entry.path),
+      ['a.txt'],
+    );
+    assert.deepEqual(record.skipped, [
+      { root: 'r1', path: 'gone.txt', reason: 'vanished' },
+      { root: 'r1', path: 'moved/inside.txt', reason: 'changed-during-read' },
+    ]);
+  },
+);
+
+test(
+  'a working tree in the middle of a merge conflict is refused',
+  { skip },
+  async (t) => {
+    const { base, directory } = await setup(t);
+    const repo = await repository(base, { 'a.txt': 'base\n', 'b.txt': 'b\n' });
+    git(repo, 'checkout', '-q', '-b', 'other');
+    await writeFile(join(repo, 'a.txt'), 'other\n');
+    git(repo, 'commit', '-q', '-am', 'other');
+    git(repo, 'checkout', '-q', 'main');
+    await writeFile(join(repo, 'a.txt'), 'main\n');
+    git(repo, 'commit', '-q', '-am', 'main');
+    assert.throws(() => git(repo, 'merge', '-q', 'other'));
+    await assert.rejects(
+      importPaths(directory, [{ worktree: repo }]),
+      /has unmerged paths, from a merge in progress: a\.txt\. Sulai does not observe a working tree with unresolved conflicts/,
+    );
+    // Once resolved, it is observed again.
+    git(repo, 'add', 'a.txt');
+    const result = await importPaths(directory, [{ worktree: repo }]);
+    assert.equal(result.status, 'complete');
   },
 );
 

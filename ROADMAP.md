@@ -26,12 +26,16 @@ The work, in order:
   [ADR 0009](docs/adr/0009-git-acquisition-records-a-commit.md).
 - **The local flow, end to end.** An agent sets up Sulai in an ordinary project,
   keeps its state as it works, and answers from it, with no Sulai concepts
-  handed to the person. The commands are in
-  [ADR 0011](docs/adr/0011-orientation-checks-the-state-before-serving-it.md),
-  and a Git project is observed as its working tree, so the agent never commits
-  for Sulai: [ADR 0012](docs/adr/0012-a-git-working-tree-is-its-own-source.md).
-  Done when an agent given no Sulai instructions keeps the state through a
-  change made outside its session.
+  handed to the person. Done:
+  [ADR 0011](docs/adr/0011-orientation-checks-the-state-before-serving-it.md)
+  and [ADR 0012](docs/adr/0012-a-git-working-tree-is-its-own-source.md). An
+  agent given no Sulai instructions kept the state through a change made outside
+  its session, and Sulai reported the moved evidence before the state was used,
+  with no commit and no human step. Two things it did not show: that every fresh
+  agent finds Sulai on its own, and that keeping the state is cheap. It still
+  costs the agent noticeably more than working without it.
+- **Less bookkeeping for the agent.** Fewer steps between writing a state page
+  and recording it, measured against an agent working without Sulai.
 - **An installable pre-alpha.** A published CLI instead of a clone and a build.
 
 Sulai itself does not call a model. The agent doing the work decides what

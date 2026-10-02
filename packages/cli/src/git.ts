@@ -345,7 +345,7 @@ export async function openWorktree(input: string): Promise<GitWorktree> {
 
 /** What Git selects in a working tree, as it names the paths. */
 export interface WorktreeListing {
-  /** Index entries, one per path: mode, object ID, and the path's bytes. */
+  /** Index entries, all merged, one per path: mode, object ID, path bytes. */
   readonly tracked: readonly {
     readonly mode: string;
     readonly id: string;
@@ -374,6 +374,10 @@ function fields(output: Buffer): Buffer[] {
  * untracked path Git does not ignore. Only `ls-files` runs. It reads the index
  * and walks the folder with Git's ignore rules, reads no file's content, runs
  * no filter, and writes nothing. Ignored files are never listed.
+ *
+ * An index with unmerged entries is refused. During a conflict a path can hold
+ * several stages, even a submodule in one and a file in another, so there is no
+ * one entry to record for it, and the record has no way to say so.
  */
 export async function listWorktree(
   worktree: GitWorktree,
@@ -384,20 +388,28 @@ export async function listWorktree(
     { tooLarge },
   );
   const tracked = [];
-  const seen = new Set<string>();
+  const unmerged = new Set<string>();
   for (const item of fields(staged.stdout)) {
     const tab = item.indexOf(0x09);
-    const [mode, id] =
+    const [mode, id, stage] =
       tab === -1 ? [] : item.subarray(0, tab).toString('latin1').split(' ');
-    if (id === undefined) {
+    if (stage === undefined) {
       throw new ValidationError('git ls-files printed an unexpected line');
     }
     const path = item.subarray(tab + 1);
-    // A conflicted path has an entry per stage; the working tree has one file.
-    const key = path.toString('latin1');
-    if (seen.has(key)) continue;
-    seen.add(key);
-    tracked.push({ mode: mode as string, id, path });
+    if (stage !== '0') {
+      unmerged.add(path.toString('utf8'));
+      continue;
+    }
+    tracked.push({ mode: mode as string, id: id as string, path });
+  }
+  if (unmerged.size > 0) {
+    const paths = [...unmerged];
+    const shown = paths.slice(0, 5).join(', ');
+    const more = paths.length > 5 ? `, and ${paths.length - 5} more` : '';
+    throw new ValidationError(
+      `${worktree.locator} has unmerged paths, from a merge in progress: ${shown}${more}. Sulai does not observe a working tree with unresolved conflicts; resolve them, then observe it again.`,
+    );
   }
   const others = await run(
     ['-C', worktree.folder, 'ls-files', '-z', '--others', '--exclude-standard'],
