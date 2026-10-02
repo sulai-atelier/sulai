@@ -21,6 +21,7 @@ const cli = fileURLToPath(new URL('../dist/main.js', import.meta.url));
 
 const VERSION_4 = '{"format":"sulai.project","version":4}\n';
 const VERSION_5 = '{"format":"sulai.project","version":5}\n';
+const VERSION_6 = '{"format":"sulai.project","version":6}\n';
 
 const hex = (bytes: Buffer) => createHash('sha256').update(bytes).digest('hex');
 
@@ -115,7 +116,7 @@ test('a version 4 store is refused until upgraded, and upgrading changes only th
     await version4Store(t);
   const before = await snapshot(store);
   const refused =
-    /storage format version 4; this build requires version 5\. Upgrade it with `sulai upgrade`/;
+    /storage format version 4; this build requires version 6\. Upgrade it with `sulai upgrade`/;
   await assert.rejects(inspectProject(directory), refused);
   await assert.rejects(projectStatus(directory), refused);
   await assert.rejects(initializeProject(directory), refused);
@@ -125,18 +126,18 @@ test('a version 4 store is refused until upgraded, and upgrading changes only th
   assert.deepEqual(await upgradeProject(directory), {
     directory,
     from: 4,
-    to: 5,
+    to: 6,
     upgraded: true,
     verified: { artifacts: 2, occurrences: 1, states: 1 },
   });
   const after = await snapshot(store);
-  assert.equal(after.get('project.json')?.toString('utf8'), VERSION_5);
+  assert.equal(after.get('project.json')?.toString('utf8'), VERSION_6);
   after.delete('project.json');
   before.delete('project.json');
   assert.deepEqual(after, before);
 
   // Every version 1 record reads as it is, and the history continues in
-  // version 2 from where it stood.
+  // version 3 from where it stood.
   const inspection = await inspectProject(directory);
   assert.deepEqual(
     inspection.occurrences.map((item) => item.id),
@@ -147,12 +148,12 @@ test('a version 4 store is refused until upgraded, and upgrading changes only th
     [state.id],
   );
   const next = await recordState(directory, page, occurrence.id);
-  assert.match(next.id, /^state:v2:/);
+  assert.match(next.id, /^state:v3:/);
   assert.equal(next.parent, state.id);
   assert.deepEqual(await upgradeProject(directory), {
     directory,
-    from: 5,
-    to: 5,
+    from: 6,
+    to: 6,
     upgraded: false,
   });
 });
@@ -192,7 +193,7 @@ test('a corrupt version 4 store refuses the upgrade and keeps its version 4 mark
   assert.deepEqual(await readdir(join(store, 'tmp')), []);
 });
 
-test('a version 4 marker over records only version 5 writes refuses the upgrade', async (t) => {
+test('a version 4 marker over records only a later version writes refuses the upgrade', async (t) => {
   const { base, directory, store } = await version4Store(t);
   const later = encodeOccurrence({
     format: 'sulai.occurrence',
@@ -220,7 +221,7 @@ test('a version 4 marker over records only version 5 writes refuses the upgrade'
   );
   await assert.rejects(
     upgradeProject(directory),
-    /marked version 4 but holds records only version 5 writes/,
+    /marked version 4 but holds records only a later version writes/,
   );
   assert.equal(await readFile(join(store, 'project.json'), 'utf8'), VERSION_4);
 });
@@ -233,6 +234,114 @@ test('versions before 4 cannot be upgraded', async (t) => {
   );
   await assert.rejects(
     upgradeProject(directory),
-    /version 3; this build requires version 5\. Only version 4 can be upgraded/,
+    /version 3; this build requires version 6\. Only versions 4 and 5 can be upgraded/,
   );
+});
+
+/** A version 5 store: the version 4 records, plus a version 2 occurrence and revision. */
+async function version5Store(t: TestContext) {
+  const store = await version4Store(t);
+  const later = encodeOccurrence({
+    format: 'sulai.occurrence',
+    version: 2,
+    nonce: 'fedcba9876543210fedcba9876543210',
+    startedAt: '2026-01-03T00:00:00.000Z',
+    finishedAt: '2026-01-03T00:00:00.000Z',
+    status: 'complete',
+    roots: [
+      {
+        id: 'r1',
+        source: 'filesystem',
+        kind: 'directory',
+        platform: process.platform,
+        locator: resolve(store.base, 'empty'),
+      },
+    ],
+    entries: [],
+    skipped: [],
+    excluded: [],
+  });
+  await writeFile(
+    join(store.store, 'occurrences', `${later.id.slice(-64)}.json`),
+    later.bytes,
+  );
+  const revision = encodeStateRevision({
+    format: 'sulai.state',
+    version: 2,
+    parent: store.state.id,
+    createdAt: '2026-01-03T00:00:01.000Z',
+    page: `sha256:${hex(store.page)}`,
+    occurrence: later.id,
+    references: [
+      {
+        locator: 'r1/notes.md#L1',
+        status: 'unresolved',
+        reason: 'path-not-in-occurrence',
+      },
+    ],
+  });
+  await writeFile(
+    join(store.store, 'states', `${revision.id.slice(-64)}.json`),
+    revision.bytes,
+  );
+  await writeFile(join(store.store, 'project.json'), VERSION_5);
+  return { ...store, later, revision };
+}
+
+test('a version 5 store is refused until upgraded, and upgrading changes only the marker', async (t) => {
+  const { directory, store, page, later, revision } = await version5Store(t);
+  const before = await snapshot(store);
+  await assert.rejects(
+    projectStatus(directory),
+    /storage format version 5; this build requires version 6\. Upgrade it with `sulai upgrade`/,
+  );
+  assert.deepEqual(await upgradeProject(directory), {
+    directory,
+    from: 5,
+    to: 6,
+    upgraded: true,
+    verified: { artifacts: 2, occurrences: 2, states: 2 },
+  });
+  const after = await snapshot(store);
+  assert.equal(after.get('project.json')?.toString('utf8'), VERSION_6);
+  after.delete('project.json');
+  before.delete('project.json');
+  assert.deepEqual(after, before);
+  // The history continues in version 3 from the version 2 head.
+  const next = await recordState(directory, page, later.id);
+  assert.match(next.id, /^state:v3:/);
+  assert.equal(next.parent, revision.id);
+});
+
+test('a version 5 marker over a record only version 6 writes refuses the upgrade', async (t) => {
+  const { base, directory, store } = await version5Store(t);
+  const newer = encodeOccurrence({
+    format: 'sulai.occurrence',
+    version: 3,
+    nonce: '00112233445566778899aabbccddeeff',
+    startedAt: '2026-01-04T00:00:00.000Z',
+    finishedAt: '2026-01-04T00:00:00.000Z',
+    status: 'complete',
+    roots: [
+      {
+        id: 'r1',
+        source: 'filesystem',
+        kind: 'directory',
+        platform: process.platform,
+        locator: resolve(base, 'empty'),
+      },
+    ],
+    entries: [],
+    skipped: [],
+    excluded: [],
+  });
+  await writeFile(
+    join(store, 'occurrences', `${newer.id.slice(-64)}.json`),
+    newer.bytes,
+  );
+  await assert.rejects(
+    upgradeProject(directory),
+    /marked version 5 but holds records only a later version writes/,
+  );
+  assert.equal(await readFile(join(store, 'project.json'), 'utf8'), VERSION_5);
 });

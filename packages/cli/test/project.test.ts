@@ -69,7 +69,7 @@ test('the project marker is an exact, independently specified byte sequence', as
   // carries no artifact format.
   assert.equal(
     marker.toString('utf8'),
-    '{"format":"sulai.project","version":5}\n',
+    '{"format":"sulai.project","version":6}\n',
   );
   assert.equal(marker.byteLength, 39);
 });
@@ -111,7 +111,7 @@ test('storage accepts arbitrary bytes and never interprets them', async (t) => {
   assert.deepEqual(inspection.artifacts, [
     { id: imported.id, byteLength: raw.byteLength },
   ]);
-  assert.equal(inspection.version, 5);
+  assert.equal(inspection.version, 6);
 });
 
 test('preserve first, interpret second: unreadable material is stored and survives a failed interpretation', async (t) => {
@@ -505,7 +505,7 @@ test('a version 1 project is refused with a specific, actionable message', async
     '{"format":"sulai.project","version":1,"artifactFormat":"sulai.conversation.v1"}\n',
   );
   const specific =
-    /storage format version 1.*requires version 5.*Only version 4 can be upgraded/s;
+    /storage format version 1.*requires version 6.*Only versions 4 and 5 can be upgraded/s;
   await assert.rejects(inspectProject(directory), specific);
   // Every entry point must name the version. `init` previously reached the
   // publish path first and reported a byte-count mismatch, which tells the user
@@ -535,7 +535,7 @@ test('a version 2 project, which had no occurrence records, is refused by versio
   const marker = join(directory, '.sulai', 'project.json');
   await writeFile(marker, '{"format":"sulai.project","version":2}\n');
   const specific =
-    /storage format version 2.*requires version 5.*Only version 4 can be upgraded/s;
+    /storage format version 2.*requires version 6.*Only versions 4 and 5 can be upgraded/s;
   await assert.rejects(inspectProject(directory), specific);
   await assert.rejects(initializeProject(directory), specific);
   await assert.rejects(importArtifactFile(directory, fixture), specific);
@@ -554,7 +554,7 @@ test('a version 3 project, which had no state revisions, is refused by version',
   const marker = join(directory, '.sulai', 'project.json');
   await writeFile(marker, '{"format":"sulai.project","version":3}\n');
   const specific =
-    /storage format version 3.*requires version 5.*Only version 4 can be upgraded/s;
+    /storage format version 3.*requires version 6.*Only versions 4 and 5 can be upgraded/s;
   await assert.rejects(inspectProject(directory), specific);
   await assert.rejects(initializeProject(directory), specific);
   assert.deepEqual((await readdir(join(directory, '.sulai'))).sort(), [
@@ -660,7 +660,7 @@ test('CLI initializes, imports, inspects, and interprets in separate processes',
   const imported = run(['import', directory, fixture]) as {
     occurrenceId: string;
   };
-  assert.match(imported.occurrenceId, /^occurrence:v2:[a-f0-9]{64}$/);
+  assert.match(imported.occurrenceId, /^occurrence:v3:[a-f0-9]{64}$/);
   assert.deepEqual(imported, {
     occurrenceId: imported.occurrenceId,
     status: 'complete',
@@ -676,7 +676,7 @@ test('CLI initializes, imports, inspects, and interprets in separate processes',
   };
   assert.deepEqual(inspection, {
     format: 'sulai.project',
-    version: 5,
+    version: 6,
     artifacts: [summary],
     occurrences: [
       {

@@ -145,7 +145,7 @@ test('a directory acquisition answers which inputs, which bytes, which were new,
   const bytes = await readFile(
     join(directory, '.sulai', 'occurrences', name as string),
   );
-  assert.equal(`occurrence:v2:${name?.slice(0, 64)}`, result.occurrenceId);
+  assert.equal(`occurrence:v3:${name?.slice(0, 64)}`, result.occurrenceId);
   assert.equal(
     createHash('sha256').update(bytes).digest('hex'),
     name?.slice(0, 64),
@@ -401,7 +401,7 @@ test('inspection refuses a corrupt, non-canonical, or dangling occurrence and st
   const store = join(directory, '.sulai', 'occurrences');
   const file = join(
     store,
-    `${occurrenceId.slice('occurrence:v2:'.length)}.json`,
+    `${occurrenceId.slice('occurrence:v3:'.length)}.json`,
   );
   const original = await readFile(file);
 
@@ -441,7 +441,7 @@ test('inspection refuses a corrupt, non-canonical, or dangling occurrence and st
     const dangling = encodeOccurrence({ ...record, entries: [entry] });
     const danglingName = join(
       store,
-      `${dangling.id.slice('occurrence:v2:'.length)}.json`,
+      `${dangling.id.slice('occurrence:v3:'.length)}.json`,
     );
     await writeFile(danglingName, dangling.bytes);
     await assert.rejects(inspectProject(directory), reason);

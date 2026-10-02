@@ -10,7 +10,6 @@ import { join, resolve } from 'node:path';
 import {
   MAX_STATE_PAGE_BYTES,
   extractLocators,
-  parseLocator,
   parseStateId,
   ValidationError,
 } from '@sulai/core';
@@ -40,8 +39,11 @@ const MAX_SHOWN_BYTES = 4096;
 
 /**
  * What to observe: the roots the given revision was recorded against, so its
- * citations keep their meaning, or, for a first revision, the project itself,
- * as a Git commit when it is a repository.
+ * citations keep their meaning, or, for a first revision, the project itself.
+ * A repository is observed as its working tree (ADR 0012), whether it was
+ * recorded that way or as a commit, because the question is whether the
+ * evidence still holds for the project as it is now. Only a bare repository,
+ * which has no working tree, is read as its commit again.
  */
 async function rootsFor(
   project: Project,
@@ -49,24 +51,26 @@ async function rootsFor(
 ): Promise<AcquisitionRoot[]> {
   if (revision === undefined) {
     return existsSync(join(project.root, '.git'))
-      ? [{ git: project.root }]
+      ? [{ worktree: project.root }]
       : [project.root];
   }
   const occurrence = await readStoredOccurrence(
     project.occurrences,
     revision.occurrence,
   );
-  return occurrence.roots.map((root: OccurrenceRoot) =>
-    root.source === 'git' ? { git: root.locator } : root.locator,
+  return occurrence.roots.map((root: OccurrenceRoot): AcquisitionRoot =>
+    root.source === 'git-worktree' ||
+    (root.source === 'git' && root.worktree !== 'absent')
+      ? { worktree: root.locator }
+      : root.source === 'git'
+        ? { git: root.locator }
+        : root.locator,
   );
 }
 
-/**
- * Captures the current project. Uncommitted work does not stop it: the commit
- * is observed as it is, and what differs from it is reported.
- */
+/** Captures the project as it is now. */
 function observe(project: Project, roots: readonly AcquisitionRoot[]) {
-  return importPaths(project.root, roots, { allowUncommitted: true });
+  return importPaths(project.root, roots);
 }
 
 type Observation = Awaited<ReturnType<typeof observe>>;
@@ -163,36 +167,9 @@ function bareLocators(page: string) {
 }
 
 /**
- * The citations of a page that point into files Git reports as changed but
- * not committed. They resolve against the commit, not the text in the folder.
- */
-function uncommittedCitations(page: string, observed: Observation) {
-  const differing = new Map<string, readonly string[]>();
-  for (const root of observed.roots) {
-    if ('uncommitted' in root && root.uncommitted !== undefined) {
-      differing.set(root.id, root.uncommitted);
-    }
-  }
-  return extractLocators(page).filter((locator) => {
-    const parsed = parseLocator(locator);
-    const paths = parsed === null ? undefined : differing.get(parsed.root);
-    return (
-      paths !== undefined &&
-      paths.some((path) =>
-        path.endsWith('/')
-          ? (parsed as { path: string }).path.startsWith(path)
-          : (parsed as { path: string }).path === path,
-      )
-    );
-  });
-}
-
-/**
  * Where the project stands, checked against the project as it is now. Each head
  * revision is returned with its page and with every citation whose evidence no
- * longer matches the current project, before anyone relies on it, and every
- * citation into a file with uncommitted changes, which the commit cannot
- * speak for. Nothing is
+ * longer matches the current project, before anyone relies on it. Nothing is
  * changed: the state is not repaired and no citation is retargeted. The only
  * thing written is the observation itself.
  */
@@ -231,14 +208,9 @@ export async function orient(directory: string) {
       page,
       observed: observed.occurrenceId,
       ...(await check(project, revision, page, observed)),
-      uncommitted: uncommittedCitations(page, observed),
     });
   }
   const moved = results.reduce((sum, head) => sum + head.changed.length, 0);
-  const pending = results.reduce(
-    (sum, head) => sum + head.uncommitted.length,
-    0,
-  );
   return {
     project: project.root,
     observed: [...observations.values()].map(describe),
@@ -246,13 +218,7 @@ export async function orient(directory: string) {
     next:
       (moved > 0
         ? `${moved} citation(s) no longer match the current project; each is listed under "changed" with the text it cited and the text there now. What the change means is yours to judge. A next page that keeps one of these citations is recorded with --allow-changed-citations. `
-        : '') +
-      (pending > 0
-        ? `${pending} citation(s) point into files changed but not committed, listed under "uncommitted"; they were checked against the commit only. `
-        : '') +
-      (moved === 0 && pending === 0
-        ? 'Every citation still matches the current project. '
-        : '') +
+        : 'Every citation still matches the current project. ') +
       (heads.length > 1
         ? `There are ${heads.length} heads; record the next page with --parent naming the one it continues: ${command} --parent <revision>`
         : `After changing what the project holds, write the next page from this one, changing only the lines that changed, and record it with: ${command}`),
@@ -260,13 +226,11 @@ export async function orient(directory: string) {
 }
 
 /**
- * Records the next revision against a fresh observation of the project. The
- * parent is the one head, or the one named. A locator written without its
- * backticks is refused, since it would cite nothing. A citation into a file
- * that Git reports as changed but not committed would resolve against the
- * committed text, not the text the writer read, so it is refused unless
- * `allowUncommitted` says to record anyway. A citation kept from the parent
- * that now cites different text is refused as `sulai state record` refuses it.
+ * Records the next revision against a fresh observation of the project, so its
+ * citations resolve against what the writer read, committed or not. The parent
+ * is the one head, or the one named. A locator written without its backticks
+ * is refused, since it would cite nothing. A citation kept from the parent that
+ * now cites different text is refused as `sulai state record` refuses it.
  */
 export async function recordNext(
   directory: string,
@@ -274,7 +238,6 @@ export async function recordNext(
   options: {
     readonly parent?: unknown;
     readonly allowChangedCitations?: boolean;
-    readonly allowUncommitted?: boolean;
   } = {},
 ) {
   const project = await loadProject(directory);
@@ -319,12 +282,6 @@ export async function recordNext(
       parent === undefined ? undefined : revisions.get(parent),
     ),
   );
-  const pending = uncommittedCitations(page, observed);
-  if (pending.length > 0 && options.allowUncommitted !== true) {
-    throw new ValidationError(
-      `${pending.length} citation(s) point into files changed but not committed, so they would resolve against the committed text:\n  ${pending.join('\n  ')}\nCommit those files first, or record anyway with --allow-uncommitted.`,
-    );
-  }
   const recorded = await recordState(
     project.root,
     bytes,

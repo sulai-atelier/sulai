@@ -89,7 +89,7 @@ test('a version 2 revision may name records of either version', () => {
       /names only version 1 records/,
     );
   }
-  assert.throws(() => parseStateId(id.replace('v2', 'v3')), ValidationError);
+  assert.throws(() => parseStateId(id.replace('v2', 'v4')), ValidationError);
 });
 
 test('locators name a root, a path and lines, and nothing else is a reference', () => {
@@ -243,5 +243,46 @@ test('state revisions are validated strictly on encoding and parsing', () => {
     ABC,
   ]) {
     assert.throws(() => parseStateId(value), ValidationError, String(value));
+  }
+});
+
+test('a version 3 revision may name records of any version, and version 2 may not name version 3', () => {
+  const occurrence = `occurrence:v3:${'0'.repeat(64)}`;
+  const parent =
+    'state:v2:d1f7d01d466c18d8bbae154e34868fc19e7f40f774cf60c12baff2278d11d008';
+  const value = {
+    ...golden(),
+    version: 3,
+    parent,
+    occurrence,
+    references: [
+      {
+        locator: 'r1/src/config.js#L1',
+        status: 'resolved',
+        artifact: ABC,
+        startByte: 0,
+        endByte: 3,
+      },
+    ],
+  };
+  // Written out by hand, and hashed with `sha256sum`.
+  const text = `{"format":"sulai.state","version":3,"parent":"${parent}","createdAt":"2026-01-02T03:04:05.006Z","page":"${ABC}","occurrence":"${occurrence}","references":[{"locator":"r1/src/config.js#L1","status":"resolved","artifact":"${ABC}","startByte":0,"endByte":3}]}\n`;
+  const id =
+    'state:v3:ed66a782af035399c42e1aafc23db265788a5f592145b530138cf20ecf313806';
+  const encoded = encodeStateRevision(value);
+  assert.equal(Buffer.from(encoded.bytes).toString('utf8'), text);
+  assert.equal(encoded.id, id);
+  assert.equal(stateIdOf(encoded.bytes, 3), id);
+  assert.deepEqual(parseStateRevision(Buffer.from(text)), value);
+  assert.equal(parseStateId(id), id);
+  // Version 2 names only version 1 or 2 records.
+  for (const older of [
+    { ...value, version: 2 },
+    { ...value, version: 2, occurrence: OCCURRENCE, parent: id },
+  ]) {
+    assert.throws(
+      () => encodeStateRevision(older),
+      /names only version 1 or 2 records/,
+    );
   }
 });

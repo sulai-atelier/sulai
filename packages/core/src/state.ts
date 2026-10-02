@@ -19,13 +19,15 @@ import {
  * explicitly unresolved, and nothing else is asserted.
  *
  * Version 2 is version 1 except that its occurrence and its parent may be of
- * either version (ADR 0009). Version 1 records stay valid.
+ * version 1 or 2 (ADR 0009). Version 3 is version 2 except that they may be of
+ * any version, the occurrence's version 3 included (ADR 0012). Earlier records
+ * stay valid.
  */
 export const STATE_FORMAT = 'sulai.state';
 
 /** The version new revisions are written in. */
-export const STATE_VERSION = 2;
-export type StateVersion = 1 | 2;
+export const STATE_VERSION = 3;
+export type StateVersion = 1 | 2 | 3;
 
 /** Bounds a state page, which is read whole to find its references. */
 export const MAX_STATE_PAGE_BYTES = 1024 * 1024;
@@ -181,7 +183,7 @@ function validate(value: unknown): StateRevision {
   );
   if (
     input.format !== STATE_FORMAT ||
-    (input.version !== 1 && input.version !== 2)
+    (input.version !== 1 && input.version !== 2 && input.version !== 3)
   ) {
     throw new ValidationError('Unsupported state format or version');
   }
@@ -195,6 +197,15 @@ function validate(value: unknown): StateRevision {
   ) {
     throw new ValidationError(
       'A version 1 state revision names only version 1 records',
+    );
+  }
+  if (
+    version === 2 &&
+    (occurrence.startsWith('occurrence:v3:') ||
+      (parent !== null && parent.startsWith('state:v3:')))
+  ) {
+    throw new ValidationError(
+      'A version 2 state revision names only version 1 or 2 records',
     );
   }
   const references = array(input.references, 'State references').map(
@@ -259,7 +270,7 @@ export function stateIdOf(bytes: Uint8Array, version: StateVersion): StateId {
 }
 
 export function parseStateId(value: unknown): StateId {
-  if (typeof value !== 'string' || !/^state:v[12]:[a-f0-9]{64}$/.test(value)) {
+  if (typeof value !== 'string' || !/^state:v[123]:[a-f0-9]{64}$/.test(value)) {
     throw new ValidationError('Invalid state ID');
   }
   return value as StateId;

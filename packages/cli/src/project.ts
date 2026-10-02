@@ -14,18 +14,26 @@ import {
 } from './store.js';
 
 export const PROJECT_FORMAT = 'sulai.project';
-export const PROJECT_VERSION = 5;
+export const PROJECT_VERSION = 6;
 
-/** The one earlier storage format that `sulai upgrade` accepts. */
-export const UPGRADABLE_VERSION = 4;
+/**
+ * The earlier storage formats `sulai upgrade` accepts, each with the record
+ * versions a store in that format can hold.
+ */
+export const UPGRADABLE_VERSIONS: ReadonlyMap<number, readonly number[]> =
+  new Map([
+    [4, [1]],
+    [5, [1, 2]],
+  ]);
 
 /**
  * The project marker describes the Sulai storage format only. It deliberately
  * says nothing about the format of the artifacts inside, because an artifact is
  * exact bytes of any kind. Version 1 embedded `artifactFormat`; version 2 had no
  * occurrence records; version 3 had no state revisions; version 4 had no
- * version 2 occurrences or state revisions. All are refused rather than
- * half-verified, and only version 4 can be upgraded.
+ * version 2 occurrences or state revisions; version 5 had no version 3 ones.
+ * All are refused rather than half-verified, and only versions 4 and 5 can be
+ * upgraded.
  */
 export function projectMarker(version: number): Buffer {
   return Buffer.from(
@@ -78,11 +86,15 @@ export function describeUnsupportedMarker(bytes: Buffer): string {
     ) {
       const version = (parsed as { version?: unknown }).version;
       const found = `Project uses storage format version ${String(version)}; this build requires version ${PROJECT_VERSION}.`;
-      if (bytes.equals(projectMarker(UPGRADABLE_VERSION))) {
+      if (
+        typeof version === 'number' &&
+        UPGRADABLE_VERSIONS.has(version) &&
+        bytes.equals(projectMarker(version))
+      ) {
         return `${found} Upgrade it with \`sulai upgrade\`, which changes only the format marker.`;
       }
       if (version !== PROJECT_VERSION) {
-        return `${found} Only version ${UPGRADABLE_VERSION} can be upgraded.`;
+        return `${found} Only versions ${[...UPGRADABLE_VERSIONS.keys()].join(' and ')} can be upgraded.`;
       }
     }
   } catch {

@@ -142,7 +142,7 @@ test('every structural rule is enforced on both encoding and parsing', () => {
       /missing or unknown fields/,
     ],
     ['format', variant((v) => (v.format = 'sulai.other')), /format or version/],
-    ['version', variant((v) => (v.version = 3)), /format or version/],
+    ['version', variant((v) => (v.version = 4)), /format or version/],
     [
       'uppercase nonce',
       variant((v) => (v.nonce = v.nonce.toUpperCase())),
@@ -385,7 +385,7 @@ test('occurrence identities are validated', () => {
     null,
     '',
     GOLDEN_ID.toUpperCase(),
-    GOLDEN_ID.replace('v1', 'v3'),
+    GOLDEN_ID.replace('v1', 'v4'),
     `${GOLDEN_ID}0`,
     `sha256:${'a'.repeat(64)}`,
     '../occurrences/x',
@@ -600,7 +600,7 @@ test('every version 2 rule is enforced on both encoding and parsing', () => {
       variantV2((v) => {
         v.excluded = [{ root: 'r1', path: 'lib', reason: 'submodule' }];
       }),
-      /Only a Git root can exclude a submodule/,
+      /A folder root excludes only the project store/,
     ],
     [
       'submodule without its commit',
@@ -661,4 +661,169 @@ test('a sha256 repository records full sha256 object IDs', () => {
       }),
     /full sha256 object ID/,
   );
+});
+
+function goldenV3() {
+  return {
+    format: 'sulai.occurrence',
+    version: 3,
+    nonce: '0123456789abcdef0123456789abcdef',
+    startedAt: '2026-01-02T03:04:05.006Z',
+    finishedAt: '2026-01-02T03:04:06.007Z',
+    status: 'partial',
+    roots: [
+      {
+        id: 'r1',
+        source: 'git-worktree',
+        objectFormat: 'sha1',
+        head: '1'.repeat(40) as string | null,
+        tree: '2'.repeat(40) as string | null,
+        selection: 'tracked-and-unignored',
+        platform: 'linux',
+        locator: '/synthetic/repo',
+      },
+      {
+        id: 'r2',
+        source: 'git-worktree',
+        objectFormat: 'sha1',
+        head: null,
+        tree: null,
+        selection: 'tracked-and-unignored',
+        platform: 'linux',
+        locator: '/synthetic/fresh',
+      },
+    ] as Record<string, unknown>[],
+    entries: [
+      {
+        root: 'r1',
+        path: 'src/config.js',
+        artifact: ABC,
+        byteLength: 3,
+        modifiedAt: '2026-01-01T00:00:00.000Z',
+        new: true,
+      },
+      {
+        root: 'r2',
+        path: 'notes.md',
+        artifact: ABC,
+        byteLength: 3,
+        modifiedAt: '2026-01-01T00:00:00.000Z',
+        new: true,
+      },
+    ] as Record<string, unknown>[],
+    skipped: [{ root: 'r1', path: 'link', reason: 'symbolic-link' }] as Record<
+      string,
+      unknown
+    >[],
+    excluded: [
+      { root: 'r1', path: '.sulai', reason: 'project-store' },
+      { root: 'r1', path: 'scratch', reason: 'nested-repository' },
+      {
+        root: 'r1',
+        path: 'vendor/lib',
+        reason: 'submodule',
+        commit: '3'.repeat(40),
+      },
+    ] as Record<string, unknown>[],
+  };
+}
+
+type GoldenV3 = ReturnType<typeof goldenV3>;
+
+// Written out by hand, and hashed with `sha256sum`.
+const GOLDEN_V3_TEXT = `{"format":"sulai.occurrence","version":3,"nonce":"0123456789abcdef0123456789abcdef","startedAt":"2026-01-02T03:04:05.006Z","finishedAt":"2026-01-02T03:04:06.007Z","status":"partial","roots":[{"id":"r1","source":"git-worktree","objectFormat":"sha1","head":"${'1'.repeat(40)}","tree":"${'2'.repeat(40)}","selection":"tracked-and-unignored","platform":"linux","locator":"/synthetic/repo"},{"id":"r2","source":"git-worktree","objectFormat":"sha1","head":null,"tree":null,"selection":"tracked-and-unignored","platform":"linux","locator":"/synthetic/fresh"}],"entries":[{"root":"r1","path":"src/config.js","artifact":"${ABC}","byteLength":3,"modifiedAt":"2026-01-01T00:00:00.000Z","new":true},{"root":"r2","path":"notes.md","artifact":"${ABC}","byteLength":3,"modifiedAt":"2026-01-01T00:00:00.000Z","new":true}],"skipped":[{"root":"r1","path":"link","reason":"symbolic-link"}],"excluded":[{"root":"r1","path":".sulai","reason":"project-store"},{"root":"r1","path":"scratch","reason":"nested-repository"},{"root":"r1","path":"vendor/lib","reason":"submodule","commit":"${'3'.repeat(40)}"}]}\n`;
+const GOLDEN_V3_ID =
+  'occurrence:v3:819a2c5b409ccd60b86c033902c1830785b1b2cbf53ff606b942d4995c60f052';
+
+function variantV3(change: (value: GoldenV3) => void): GoldenV3 {
+  const value = goldenV3();
+  change(value);
+  return value;
+}
+
+test('a version 3 occurrence records working trees, with one encoding', () => {
+  const { id, bytes, occurrence } = encodeOccurrence(goldenV3());
+  assert.equal(Buffer.from(bytes).toString('utf8'), GOLDEN_V3_TEXT);
+  assert.equal(bytes.byteLength, 1283);
+  assert.equal(id, GOLDEN_V3_ID);
+  assert.equal(occurrenceIdOf(bytes, 3), GOLDEN_V3_ID);
+  assert.deepEqual(parseOccurrence(bytes), occurrence);
+  assert.deepEqual(parseOccurrence(Buffer.from(GOLDEN_V3_TEXT)), goldenV3());
+  assert.equal(parseOccurrenceId(GOLDEN_V3_ID), GOLDEN_V3_ID);
+  // Earlier versions are still read as written.
+  assert.equal(parseOccurrence(Buffer.from(GOLDEN_V2_TEXT)).version, 2);
+  assert.equal(parseOccurrence(Buffer.from(GOLDEN_TEXT)).version, 1);
+});
+
+test('every version 3 rule is enforced on both encoding and parsing', () => {
+  const root = (v: GoldenV3, index: number) =>
+    v.roots[index] as Record<string, unknown>;
+  const invalid: Array<[string, unknown, RegExp]> = [
+    [
+      'working tree in version 2',
+      variantV3((v) => (v.version = 2)),
+      /root source/,
+    ],
+    [
+      'head without its tree',
+      variantV3((v) => (root(v, 0).tree = null)),
+      /HEAD and its tree, or neither/,
+    ],
+    [
+      'short head',
+      variantV3((v) => (root(v, 0).head = '1'.repeat(39))),
+      /full sha1 object ID/,
+    ],
+    [
+      'unknown selection',
+      variantV3((v) => (root(v, 0).selection = 'everything')),
+      /Working-tree selection/,
+    ],
+    [
+      'a commit field on a working tree',
+      variantV3((v) => (root(v, 0).commit = '1'.repeat(40))),
+      /missing or unknown fields/,
+    ],
+    [
+      'a blob on a working-tree entry',
+      variantV3((v) => {
+        v.entries[0] = { ...v.entries[0], blob: ABC_BLOB };
+      }),
+      /missing or unknown fields/,
+    ],
+    [
+      'submodule without its commit',
+      variantV3((v) => delete (v.excluded[2] as { commit?: string }).commit),
+      /missing or unknown fields/,
+    ],
+    [
+      'inside a nested repository',
+      variantV3((v) => ((v.entries[0] as { path: string }).path = 'scratch/x')),
+      /inside an excluded/,
+    ],
+    [
+      'folder root excluding a nested repository',
+      variantV3((v) => {
+        v.roots[0] = {
+          id: 'r1',
+          source: 'filesystem',
+          kind: 'directory',
+          platform: 'linux',
+          locator: '/synthetic/repo',
+        };
+        v.excluded = [v.excluded[1] as Record<string, unknown>];
+      }),
+      /A folder root excludes only the project store/,
+    ],
+  ];
+  for (const [label, value, reason] of invalid) {
+    const refused = (error: unknown) =>
+      error instanceof ValidationError && reason.test(error.message);
+    assert.throws(() => encodeOccurrence(value), refused, `encode: ${label}`);
+    assert.throws(
+      () => parseOccurrence(encode(value)),
+      refused,
+      `parse: ${label}`,
+    );
+  }
 });
