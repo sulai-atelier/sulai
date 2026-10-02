@@ -26,16 +26,21 @@ const usage = `Usage:
                                                citations against it, and prints the
                                                state with every citation whose
                                                evidence moved
-  sulai record <directory> <page|->            record the next page, from a file or
-               [--parent <state-id>]           standard input, against the project
-               [--allow-changed-citations]     as it is now
+  sulai record <directory> [page|-]            record the next page against the
+               [--parent <state-id>]           project as it is now: the draft,
+               [--allow-changed-citations]     or a page from a file or standard
+                                               input
 
-These three are how the agent working on a project keeps its state. Write each
-page from the previous one, changing only the lines that changed. Cite the
-evidence for each claim as \`r1/<path>#L<first>-L<last>\`, against the roots
-orient lists. In a Git project Sulai reads the working tree as it is, so nothing
-needs committing first. Sulai reports what moved; it never decides what a change
-means or repairs the state.
+These three are how the agent working on a project keeps its state. orient keeps
+the current page in .sulai/draft.md; edit it there, changing only the lines that
+changed, and record it with \`sulai record <directory>\`. After each claim, cite
+its evidence in backticks, against the roots orient lists:
+
+    Lists sort by date. \`r1/src/config.js#L3\`
+
+In a Git project Sulai reads the working tree as it is, so nothing needs
+committing first. Sulai reports what moved; it never decides what a change means
+or repairs the state.
 
 Every command:
   sulai init <directory>
@@ -230,8 +235,11 @@ async function main(args: string[]): Promise<void> {
       ['parent'],
       ['allow-changed-citations'],
     );
-    if (positional.length !== 2) throw new Error(usage.trimEnd());
-    const page = positional[1] as string;
+    if (positional.length < 1 || positional.length > 2) {
+      throw new Error(usage.trimEnd());
+    }
+    // With no page, the draft is recorded.
+    const page = positional[1];
     result = await recordNext(
       positional[0] as string,
       page === '-' ? await readStandardInput(MAX_STATE_PAGE_BYTES) : page,

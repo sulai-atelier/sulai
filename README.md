@@ -107,15 +107,22 @@ three, and never handles an identifier:
 ```sh
 npm run cli -- init ../my-project
 npm run cli -- orient ../my-project
-npm run cli -- record ../my-project - < page.md
+npm run cli -- record ../my-project
 ```
 
 `orient` observes the project as it is, the working tree for a Git repository, and
 prints where it stands: each current page, and every citation whose evidence has
 changed since the page was recorded, with the text it cited and the text there
-now. It does not decide what the change means or repair anything. `record` saves
-the next page against the project as it is then, so nothing needs committing
-first. Both print what to do next.
+now. It does not decide what the change means or repair anything. It keeps the
+current page in `.sulai/draft.md`, where the agent edits it, citing each claim's
+evidence in backticks after it:
+
+```markdown
+Lists sort by date. `r1/src/config.js#L3`
+```
+
+`record` saves the draft as the next page, against the project as it is then, so
+nothing needs committing first. Both print what to do next.
 
 ## How it works
 
