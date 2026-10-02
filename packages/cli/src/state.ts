@@ -95,7 +95,9 @@ export async function readAllStates(project: Project) {
   return revisions;
 }
 
-function headsOf(revisions: ReadonlyMap<StateId, StateRevision>): StateId[] {
+export function headsOf(
+  revisions: ReadonlyMap<StateId, StateRevision>,
+): StateId[] {
   const parents = new Set(
     [...revisions.values()].map((revision) => revision.parent),
   );
@@ -127,7 +129,7 @@ export function summarizeState(id: StateId, revision: StateRevision) {
   };
 }
 
-async function readPage(project: Project, page: ArtifactId) {
+export async function readPage(project: Project, page: ArtifactId) {
   const artifact = await readArtifact(project, page, MAX_STATE_PAGE_BYTES);
   return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(
     artifact.bytes(),
@@ -170,7 +172,7 @@ export async function verifyState(
 }
 
 /** A citation kept from the parent whose evidence is no longer the same bytes. */
-interface ChangedCitation {
+export interface ChangedCitation {
   readonly locator: string;
   readonly lines: readonly number[];
   readonly now: 'different-text' | 'unresolved';
@@ -181,7 +183,7 @@ interface ChangedCitation {
  * and line range, so when its file changes it can still resolve while pointing
  * at other text. That is caught here, where it would otherwise pass unseen.
  */
-async function changedCitations(
+export async function changedCitations(
   project: Project,
   parent: StateRevision,
   references: readonly StateReference[],

@@ -2,7 +2,7 @@
  * A Sulai project on disk: the storage-format marker, the layout of `.sulai`,
  * and creating and opening a project.
  */
-import { mkdir } from 'node:fs/promises';
+import { lstat, mkdir } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { ValidationError } from '@sulai/core';
 import {
@@ -35,6 +35,9 @@ export function projectMarker(version: number): Buffer {
 
 const PROJECT_FILE = projectMarker(PROJECT_VERSION);
 
+/** Asks Git to ignore the whole store, this file included. */
+const GIT_IGNORE = Buffer.from('*\n');
+
 export function paths(directory: string) {
   const root = resolve(directory);
   const store = join(root, '.sulai');
@@ -46,6 +49,7 @@ export function paths(directory: string) {
     states: join(store, 'states'),
     temporary: join(store, 'tmp'),
     marker: join(store, 'project.json'),
+    ignore: join(store, '.gitignore'),
   };
 }
 
@@ -117,6 +121,14 @@ export async function initializeProject(directory: string) {
     project.marker,
     PROJECT_FILE,
   );
+  // In a repository, committing everything must not commit the store. Not
+  // part of the format: nothing reads it, and one already there is kept.
+  try {
+    await lstat(project.ignore);
+  } catch (error) {
+    if (!hasCode(error, 'ENOENT')) throw error;
+    await writeImmutable(project.temporary, project.ignore, GIT_IGNORE);
+  }
   return { directory: project.root, created };
 }
 

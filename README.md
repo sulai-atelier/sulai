@@ -31,6 +31,9 @@ What works:
 - versioned state pages, each citation resolved to exact preserved bytes or
   recorded as unresolved
 - `status`, `why` and `diff` over those pages
+- `orient` and `record`, for the agent keeping a project's state: the state is
+  checked against the project as it is now before it is shown, and the next page
+  is recorded with no identifiers to copy
 - integrity checks from each state revision down to the bytes it cites
 
 Not built yet:
@@ -91,6 +94,23 @@ and refuses while the working tree differs from that commit:
 ```sh
 npm run cli -- import .tmp/example --git .
 ```
+
+### Keeping a project's state as its agent
+
+The commands above show the records. An agent working in a project needs only
+three, and never handles an identifier:
+
+```sh
+npm run cli -- init ../my-project
+npm run cli -- orient ../my-project
+npm run cli -- record ../my-project - < page.md
+```
+
+`orient` observes the project, the commit at HEAD for a Git repository, and
+prints where it stands: each current page, and every citation whose evidence has
+changed since the page was recorded, with the text it cited and the text there
+now. It does not decide what the change means or repair anything. `record` saves
+the next page against the project as it is then. Both print what to do next.
 
 ## How it works
 

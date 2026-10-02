@@ -58,6 +58,7 @@ A project keeps its records under `.sulai/`:
 
 ```text
 .sulai/
+  .gitignore      *, so Git never tracks the store; not part of the format
   project.json    storage format marker, version 5
   artifacts/      <sha256>.raw
   occurrences/    <sha256>.json
@@ -92,21 +93,22 @@ a third-party runtime dependency.
 
 Inside `packages/cli/src`:
 
-| Module            | Concern                                                                |
-| ----------------- | ---------------------------------------------------------------------- |
-| `store.ts`        | streaming reads, staging, never-replace publication, verification      |
-| `project.ts`      | the `.sulai` layout, the format marker, creating and opening a project |
-| `artifacts.ts`    | storing one file; loading one artifact whole                           |
-| `acquire.ts`      | checking roots, walking or reading them, and recording an occurrence   |
-| `git.ts`          | running Git: one commit's tree and blobs, and the working-tree check   |
-| `occurrences.ts`  | reading stored occurrences and checking them against their artifacts   |
-| `references.ts`   | resolving a page's citations to byte ranges                            |
-| `state.ts`        | recording revisions; `status`, `why` and `diff`                        |
-| `inspect.ts`      | integrity checks                                                       |
-| `interpret.ts`    | reading an artifact through a format                                   |
-| `upgrade.ts`      | upgrading a storage format 4 project                                   |
-| `experimental.ts` | the experimental Claude Code command                                   |
-| `main.ts`         | argument parsing and output                                            |
+| Module            | Concern                                                                 |
+| ----------------- | ----------------------------------------------------------------------- |
+| `store.ts`        | streaming reads, staging, never-replace publication, verification       |
+| `project.ts`      | the `.sulai` layout, the format marker, creating and opening a project  |
+| `artifacts.ts`    | storing one file; loading one artifact whole                            |
+| `acquire.ts`      | checking roots, walking or reading them, and recording an occurrence    |
+| `git.ts`          | running Git: one commit's tree and blobs, and the working-tree check    |
+| `occurrences.ts`  | reading stored occurrences and checking them against their artifacts    |
+| `references.ts`   | resolving a page's citations to byte ranges                             |
+| `state.ts`        | recording revisions; `status`, `why` and `diff`                         |
+| `flow.ts`         | the agent's commands: observe, check the state, then serve or record it |
+| `inspect.ts`      | integrity checks                                                        |
+| `interpret.ts`    | reading an artifact through a format                                    |
+| `upgrade.ts`      | upgrading a storage format 4 project                                    |
+| `experimental.ts` | the experimental Claude Code command                                    |
+| `main.ts`         | argument parsing and output                                             |
 
 ## Known limits
 
@@ -114,7 +116,9 @@ Inside `packages/cli/src`:
 - A citation is a path and line range within one occurrence. Resolved again
   against a newer occurrence, it can point at different bytes if its file changed
   above those lines. Recording refuses that for citations kept from the parent
-  revision ([ADR 0008](adr/0008-a-kept-citation-keeps-its-evidence.md)), but
+  revision ([ADR 0008](adr/0008-a-kept-citation-keeps-its-evidence.md)), and
+  `orient` lists them before the state is used
+  ([ADR 0011](adr/0011-orientation-checks-the-state-before-serving-it.md)), but
   correcting them is still manual.
 - A revision cites exactly one occurrence, so refreshing a page means acquiring
   again everything it cites.

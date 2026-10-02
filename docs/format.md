@@ -96,6 +96,7 @@ publication: publication does not validate at all.
 ```text
 <project>/
   .sulai/
+    .gitignore
     project.json
     artifacts/
       <64-character-sha256-digest>.raw
@@ -105,6 +106,10 @@ publication: publication does not validate at all.
       <64-character-sha256-digest>.json
     tmp/
 ```
+
+`.gitignore` holds `*`, so a project that is also a Git repository never
+commits its store. `sulai init` writes it when it is absent. It is not part of
+the format: nothing reads it, and a file already there is kept.
 
 `project.json` is the exact UTF-8 byte sequence below followed by one LF. It is a
 format marker written and validated by the CLI, not user-editable configuration:
