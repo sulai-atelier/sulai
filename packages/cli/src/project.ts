@@ -54,10 +54,11 @@ not notes: read the project's state through the \`sulai\` command, which first
 checks it against the project as it is now. From the project folder:
 
     sulai orient .            where the project stands, and what moved
-    sulai record . <page|->   record the next state
+    sulai record .            record the next state, from draft.md
     sulai --help              everything else
 
-Nothing here is meant to be read or edited by hand.
+Nothing here is meant to be read or edited by hand, except draft.md: the next
+page, which \`sulai orient\` keeps for you to edit and \`sulai record\` records.
 `);
 
 export function paths(directory: string) {

@@ -35,7 +35,9 @@ The work, in order:
   agent finds Sulai on its own, and that keeping the state is cheap. It still
   costs the agent noticeably more than working without it.
 - **Less bookkeeping for the agent.** Fewer steps between writing a state page
-  and recording it, measured against an agent working without Sulai.
+  and recording it, measured against an agent working without Sulai. First
+  step: the agent edits a draft Sulai keeps, and citations are shown by
+  example: [ADR 0013](docs/adr/0013-the-agent-edits-a-draft-sulai-keeps.md).
 - **An installable pre-alpha.** A published CLI instead of a clone and a build.
 
 Sulai itself does not call a model. The agent doing the work decides what

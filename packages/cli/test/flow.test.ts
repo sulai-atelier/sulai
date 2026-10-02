@@ -395,6 +395,150 @@ test(
       FIRST,
     );
     assert.equal(allowed.status, 0, allowed.stderr);
-    assert.equal(run(['record', repo]).status, 1);
+    // With no page the draft is recorded, and it is unchanged.
+    const unchanged = run(['record', repo]);
+    assert.equal(unchanged.status, 1);
+    assert.match(unchanged.stderr, /unchanged from the page it began from/);
   },
 );
+
+const draftOf = (repo: string) =>
+  readFile(join(repo, '.sulai', 'draft.md'), 'utf8');
+
+test(
+  'orient keeps the next page in a draft, record records it, and the draft moves on',
+  { skip },
+  async (t) => {
+    const repo = await project(t);
+    const first = await orient(repo);
+    assert.deepEqual(first.draft, {
+      path: join(repo, '.sulai', 'draft.md'),
+      state: 'ready',
+      began: null,
+    });
+    assert.equal(await draftOf(repo), '');
+    assert.match(first.next, /Write a page in .*draft\.md/);
+    assert.match(first.next, /Lists sort by date\. `r1\/src\/config\.js#L3`/);
+    // The agent writes the page where Sulai keeps it, and records it.
+    await writeFile(join(repo, '.sulai', 'draft.md'), FIRST);
+    const recorded = await recordNext(repo);
+    assert.equal(recorded.parent, null);
+    assert.equal(recorded.references.resolved, 2);
+    assert.equal(await draftOf(repo), FIRST);
+    // The draft now begins from the revision just recorded.
+    const second = await orient(repo);
+    assert.deepEqual(second.draft, {
+      path: join(repo, '.sulai', 'draft.md'),
+      state: 'ready',
+      began: recorded.id,
+    });
+    assert.match(second.next, /The current page is in .*draft\.md/);
+    const next = FIRST.replace('20 links', '20 links per page');
+    await writeFile(join(repo, '.sulai', 'draft.md'), next);
+    const continued = await recordNext(repo);
+    assert.equal(continued.parent, recorded.id);
+    // The draft is never evidence: no observation holds it.
+    const status = git(repo, 'status', '--porcelain', '--ignored');
+    assert.match(status, /!! \.sulai\//);
+  },
+);
+
+test(
+  'orient never overwrites unrecorded edits in the draft',
+  { skip },
+  async (t) => {
+    const repo = await project(t);
+    await recordNext(repo, Buffer.from(FIRST));
+    await orient(repo);
+    const edited = `${FIRST}Next: tags.\n`;
+    await writeFile(join(repo, '.sulai', 'draft.md'), edited);
+    const result = await orient(repo);
+    assert.equal(result.draft.state, 'kept');
+    assert.match(result.next, /unrecorded edits in .*draft\.md were kept/);
+    assert.equal(await draftOf(repo), edited);
+  },
+);
+
+test(
+  'a draft begun from an older state is kept, and is recorded only with the parent named',
+  { skip },
+  async (t) => {
+    const repo = await project(t);
+    const first = await recordNext(repo, Buffer.from(FIRST));
+    await orient(repo);
+    const edited = `${FIRST}Next: tags.\n`;
+    await writeFile(join(repo, '.sulai', 'draft.md'), edited);
+    // Meanwhile the state moves on from a page given directly.
+    const other = await recordNext(
+      repo,
+      Buffer.from(FIRST.replace('date.', 'date added.')),
+    );
+    assert.equal(other.parent, first.id);
+    assert.equal(await draftOf(repo), edited);
+    const result = await orient(repo);
+    assert.equal(result.draft.state, 'behind');
+    assert.equal(result.draft.began, first.id);
+    assert.equal(await draftOf(repo), edited);
+    await assert.rejects(
+      recordNext(repo),
+      /The draft began from state:v3:\w+, but the head is now state:v3:\w+/,
+    );
+    const named = await recordNext(repo, undefined, { parent: other.id });
+    assert.equal(named.parent, other.id);
+  },
+);
+
+test(
+  'with several heads no draft is chosen, and record needs the parent',
+  { skip },
+  async (t) => {
+    const repo = await project(t);
+    const first = await recordNext(repo, Buffer.from(FIRST));
+    const a = await recordNext(repo, Buffer.from(`${FIRST}A.\n`));
+    await recordState(
+      repo,
+      Buffer.from(`${FIRST}B.\n`),
+      a.occurrence,
+      first.id,
+    );
+    await rm(join(repo, '.sulai', 'draft.md'));
+    const result = await orient(repo);
+    assert.deepEqual(result.draft, {
+      path: join(repo, '.sulai', 'draft.md'),
+      state: 'none',
+    });
+    await assert.rejects(draftOf(repo), { code: 'ENOENT' });
+    await assert.rejects(recordNext(repo), /There is no draft to record/);
+  },
+);
+
+test(
+  'an empty draft, or one unchanged from where it began, is refused',
+  { skip },
+  async (t) => {
+    const repo = await project(t);
+    await orient(repo);
+    await assert.rejects(recordNext(repo), /The draft is empty/);
+    await recordNext(repo, Buffer.from(FIRST));
+    await orient(repo);
+    await assert.rejects(
+      recordNext(repo),
+      /unchanged from the page it began from/,
+    );
+    assert.equal((await states(repo)).length, 1);
+  },
+);
+
+test('orient and record before init say to run init', async (t) => {
+  const base = await mkdtemp(join(tmpdir(), 'sulai-flow-'));
+  t.after(() => rm(base, { recursive: true, force: true }));
+  await assert.rejects(
+    orient(base),
+    /has no Sulai store yet\. Create it with: sulai init /,
+  );
+  await assert.rejects(
+    recordNext(base, Buffer.from(FIRST)),
+    /has no Sulai store yet/,
+  );
+  assert.deepEqual(await readdir(base), []);
+});

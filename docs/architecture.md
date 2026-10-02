@@ -62,6 +62,8 @@ A project keeps its records under `.sulai/`:
 .sulai/
   .gitignore      *, so Git never tracks the store; not part of the format
   README.md       read this through the sulai command; not part of the format
+  draft.md        the next page, kept for the agent to edit; not part of the format
+  draft.json      which state the draft began from; not part of the format
   project.json    storage format marker, version 6
   artifacts/      <sha256>.raw
   occurrences/    <sha256>.json
@@ -107,6 +109,7 @@ Inside `packages/cli/src`:
 | `references.ts`   | resolving a page's citations to byte ranges                             |
 | `state.ts`        | recording revisions; `status`, `why` and `diff`                         |
 | `flow.ts`         | the agent's commands: observe, check the state, then serve or record it |
+| `draft.ts`        | the draft page the agent edits between `orient` and `record`            |
 | `inspect.ts`      | integrity checks                                                        |
 | `interpret.ts`    | reading an artifact through a format                                    |
 | `upgrade.ts`      | upgrading a storage format 4 or 5 project                               |

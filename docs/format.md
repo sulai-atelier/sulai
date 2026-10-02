@@ -98,6 +98,8 @@ publication: publication does not validate at all.
   .sulai/
     .gitignore
     README.md
+    draft.md
+    draft.json
     project.json
     artifacts/
       <64-character-sha256-digest>.raw
@@ -110,8 +112,12 @@ publication: publication does not validate at all.
 
 `.gitignore` holds `*`, so a project that is also a Git repository never
 commits its store. `README.md` tells whoever finds the store to read it through
-the `sulai` command. `sulai init` writes each when it is absent. Neither is part
-of the format: nothing reads them, and a file already there is kept.
+the `sulai` command. `sulai init` writes each when it is absent. `draft.md` is
+the next page in progress, which `sulai orient` keeps and `sulai record` records
+when no page is given, and `draft.json` says which state it began from; see
+[ADR 0013](adr/0013-the-agent-edits-a-draft-sulai-keeps.md). None of these is part
+of the format: nothing reads them as records, `inspect` does not check them, and
+no acquisition reads the store.
 
 `project.json` is the exact UTF-8 byte sequence below followed by one LF. It is a
 format marker written and validated by the CLI, not user-editable configuration:

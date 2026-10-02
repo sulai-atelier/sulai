@@ -3,7 +3,8 @@
  * checks the current state against what it observed, and only then serves the
  * state. `recordNext` observes again and records the next revision against
  * that observation. Both are built only from acquisition, resolution and
- * recording; neither decides what a change means.
+ * recording; neither decides what a change means. Between them, the agent
+ * edits the next page in a draft Sulai keeps (ADR 0013).
  */
 import { existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -21,6 +22,7 @@ import type {
 } from '@sulai/core';
 import { importPaths } from './acquire.js';
 import type { AcquisitionRoot } from './acquire.js';
+import { draftPath, readDraft, writeDraft } from './draft.js';
 import { readStoredOccurrence } from './occurrences.js';
 import { loadProject } from './project.js';
 import type { Project } from './project.js';
@@ -36,6 +38,26 @@ import { artifactPath, readBounded } from './store.js';
 
 /** The most of each side of a changed citation that `orient` returns. */
 const MAX_SHOWN_BYTES = 4096;
+
+/** One line with its citation, as a page should have it. */
+const EXAMPLE = 'Lists sort by date. `r1/src/config.js#L3`';
+
+/** A command as the caller would type it, from where it was run. */
+const named = (directory: string) =>
+  /\s/.test(directory) ? JSON.stringify(directory) : directory;
+
+/**
+ * Opens the project, or says how to create it. The front door names the next
+ * step rather than leave an agent with a bare file-not-found error.
+ */
+async function openProject(directory: string) {
+  if (!existsSync(join(resolve(directory), '.sulai'))) {
+    throw new ValidationError(
+      `${directory} has no Sulai store yet. Create it with: sulai init ${named(directory)}`,
+    );
+  }
+  return loadProject(directory);
+}
 
 /**
  * What to observe: the roots the given revision was recorded against, so its
@@ -174,23 +196,30 @@ function bareLocators(page: string) {
  * thing written is the observation itself.
  */
 export async function orient(directory: string) {
-  const project = await loadProject(directory);
+  const project = await openProject(directory);
   const revisions = await readAllStates(project);
   const heads = headsOf(revisions);
   // Named as the caller named it, so the command works from where it was run.
-  const command = `sulai record ${/\s/.test(directory) ? JSON.stringify(directory) : directory} -`;
+  const command = `sulai record ${named(directory)}`;
+  const shownDraft = join(directory, '.sulai', 'draft.md');
   if (heads.length === 0) {
     const observed = await observe(project, await rootsFor(project, undefined));
+    const draft = await keepDraft(project, null, Buffer.alloc(0));
     return {
       project: project.root,
       observed: [describe(observed)],
       heads: [],
-      next: `No state is recorded yet. Write a page saying where the project stands, cite the evidence for each claim as \`r1/<path>#L<first>-L<last>\` (roots are listed under "observed"), and record it with: ${command}`,
+      draft: { path: draftPath(project), ...draft },
+      next:
+        draft.state === 'ready'
+          ? `No state is recorded yet. Write a page in ${shownDraft} saying where the project stands, with the evidence for each claim cited in backticks after it, as in: ${EXAMPLE} (roots are listed under "observed"). Then record it with: ${command}`
+          : `No state is recorded yet. ${draftNote(draft, shownDraft, command)}`,
     };
   }
   // Heads recorded against the same roots share one observation.
   const observations = new Map<string, Observation>();
   const results = [];
+  const pages = new Map<StateId, string>();
   for (const id of heads) {
     const revision = revisions.get(id) as StateRevision;
     const roots = await rootsFor(project, revision);
@@ -201,6 +230,7 @@ export async function orient(directory: string) {
       observations.set(key, observed);
     }
     const page = await readPage(project, revision.page);
+    pages.set(id, page);
     results.push({
       revision: id,
       parent: revision.parent,
@@ -217,10 +247,20 @@ export async function orient(directory: string) {
     (sum, head) => sum + head.unresolved.length,
     0,
   );
+  const head = heads.length === 1 ? (heads[0] as StateId) : undefined;
+  const draft =
+    head === undefined
+      ? await draftAmong(project, heads)
+      : await keepDraft(
+          project,
+          head,
+          Buffer.from(pages.get(head) as string, 'utf8'),
+        );
   return {
     project: project.root,
     observed: [...observations.values()].map(describe),
     heads: results,
+    draft: { path: draftPath(project), ...draft },
     next:
       (moved > 0
         ? `${moved} citation(s) no longer match the current project; each is listed under "changed" with the text it cited and the text there now. What the change means is yours to judge. A next page that keeps one of these citations is recorded with --allow-changed-citations. `
@@ -231,9 +271,69 @@ export async function orient(directory: string) {
         ? `${unresolved} citation(s) were unresolved when the state was recorded, listed under "unresolved" with the reason. `
         : '') +
       (heads.length > 1
-        ? `There are ${heads.length} heads; record the next page with --parent naming the one it continues: ${command} --parent <revision>`
-        : `After changing what the project holds, write the next page from this one, changing only the lines that changed, and record it with: ${command}`),
+        ? `There are ${heads.length} heads, so no draft is chosen for you. Record the next page with --parent naming the one it continues: ${command} <page|-> --parent <revision>`
+        : draft.state === 'ready'
+          ? `The current page is in ${shownDraft}. After changing what the project holds, edit it there, changing only the lines that changed and citing in backticks as in: ${EXAMPLE}. Then record it with: ${command}`
+          : draftNote(draft, shownDraft, command)),
   };
+}
+
+type DraftReport = {
+  /** `ready`: Sulai wrote it; `kept`: unrecorded edits begun from the head;
+   * `behind`: unrecorded edits begun elsewhere; `none`: no draft. */
+  readonly state: 'ready' | 'kept' | 'behind' | 'none';
+  /** The state it began from, null before any, or undefined when unknown. */
+  readonly began?: StateId | null | undefined;
+};
+
+/**
+ * Keeps the draft for one head, or for none: it is written only when it holds
+ * no one's work, being absent or exactly what Sulai last wrote. Unrecorded
+ * edits are never overwritten.
+ */
+async function keepDraft(
+  project: Project,
+  head: StateId | null,
+  page: Buffer,
+): Promise<DraftReport> {
+  const draft = await readDraft(project);
+  if (draft === null || !draft.edited) {
+    await writeDraft(project, page, head);
+    return { state: 'ready', began: head };
+  }
+  return {
+    state: draft.base === head ? 'kept' : 'behind',
+    began: draft.base,
+  };
+}
+
+/** With several heads no draft is chosen; one already there is left alone. */
+async function draftAmong(
+  project: Project,
+  heads: readonly StateId[],
+): Promise<DraftReport> {
+  const draft = await readDraft(project);
+  if (draft === null) return { state: 'none' };
+  return {
+    state:
+      draft.base !== undefined &&
+      draft.base !== null &&
+      heads.includes(draft.base)
+        ? 'kept'
+        : 'behind',
+    began: draft.base,
+  };
+}
+
+function draftNote(draft: DraftReport, shown: string, command: string) {
+  if (draft.state === 'kept') {
+    return `Your unrecorded edits in ${shown} were kept. Record them with: ${command}`;
+  }
+  const began =
+    draft.began === undefined
+      ? 'an unknown state'
+      : (draft.began ?? 'no state');
+  return `The draft in ${shown} holds unrecorded edits begun from ${began}, not from the current head, so it was kept, not replaced. Bring it up to date from the page above, then record it with: ${command} --parent <the state it continues>`;
 }
 
 /**
@@ -242,17 +342,29 @@ export async function orient(directory: string) {
  * is the one head, or the one named. A locator written without its backticks
  * is refused, since it would cite nothing. A citation kept from the parent that
  * now cites different text is refused as `sulai state record` refuses it.
+ *
+ * With no page, the draft is recorded (ADR 0013). It must have begun from the
+ * head it continues, unless the parent is named, and must hold something the
+ * agent wrote. After a revision is recorded, the draft holds its page, unless
+ * the page came from elsewhere and the draft holds unrecorded edits.
  */
 export async function recordNext(
   directory: string,
-  pageSource: string | Uint8Array,
+  pageSource?: string | Uint8Array,
   options: {
     readonly parent?: unknown;
     readonly allowChangedCitations?: boolean;
   } = {},
 ) {
-  const project = await loadProject(directory);
+  const project = await openProject(directory);
   const revisions = await readAllStates(project);
+  const draft = await readDraft(project);
+  const fromDraft = pageSource === undefined;
+  if (fromDraft && draft === null) {
+    throw new ValidationError(
+      `There is no draft to record. Run sulai orient ${named(directory)}, which writes one, or give a page.`,
+    );
+  }
   let parent: StateId | undefined;
   if (options.parent !== undefined) {
     parent = parseStateId(options.parent);
@@ -267,11 +379,30 @@ export async function recordNext(
       );
     }
     parent = heads[0];
+    // An old draft must not silently continue a newer head.
+    if (fromDraft && draft !== null && draft.base !== (parent ?? null)) {
+      throw new ValidationError(
+        draft.base === undefined
+          ? 'Where the draft began is not known. Name the state it continues with --parent.'
+          : `The draft began from ${draft.base ?? 'no state'}, but the head is now ${parent ?? 'none'}. Bring it up to date from the current page, then record it with --parent naming the state it continues.`,
+      );
+    }
   }
-  const bytes =
-    typeof pageSource === 'string'
+  const bytes = fromDraft
+    ? (draft?.bytes as Buffer)
+    : typeof pageSource === 'string'
       ? await readBounded(resolve(pageSource), MAX_STATE_PAGE_BYTES)
-      : Buffer.from(pageSource);
+      : Buffer.from(pageSource as Uint8Array);
+  if (fromDraft && bytes.byteLength === 0) {
+    throw new ValidationError(
+      `The draft is empty. Write the page in ${join(directory, '.sulai', 'draft.md')} first.`,
+    );
+  }
+  if (fromDraft && draft?.edited === false && parent !== undefined) {
+    throw new ValidationError(
+      'The draft is unchanged from the page it began from, so there is nothing new to record. Edit it first.',
+    );
+  }
   let page: string;
   try {
     page = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(
@@ -283,7 +414,7 @@ export async function recordNext(
   const bare = bareLocators(page);
   if (bare.length > 0) {
     throw new ValidationError(
-      `${bare.length} citation(s) are not in backticks, so they would be recorded as plain text, citing nothing:\n  ${bare.join('\n  ')}\nPut each one in backticks, as \`r1/<path>#L<first>-L<last>\`.`,
+      `${bare.length} citation(s) are not in backticks, so they would be recorded as plain text, citing nothing:\n  ${bare.join('\n  ')}\nPut each one in backticks after its claim, as in: ${EXAMPLE}`,
     );
   }
   const observed = await observe(
@@ -300,5 +431,14 @@ export async function recordNext(
     parent,
     { allowChangedCitations: options.allowChangedCitations === true },
   );
-  return { ...recorded, observed: describe(observed) };
+  // The draft moves on to the page just recorded, unless it holds edits that
+  // this record did not take.
+  if (fromDraft || draft === null || !draft.edited) {
+    await writeDraft(project, bytes, recorded.id);
+  }
+  return {
+    ...recorded,
+    observed: describe(observed),
+    draft: draftPath(project),
+  };
 }
