@@ -59,6 +59,7 @@ A project keeps its records under `.sulai/`:
 ```text
 .sulai/
   .gitignore      *, so Git never tracks the store; not part of the format
+  README.md       read this through the sulai command; not part of the format
   project.json    storage format marker, version 5
   artifacts/      <sha256>.raw
   occurrences/    <sha256>.json

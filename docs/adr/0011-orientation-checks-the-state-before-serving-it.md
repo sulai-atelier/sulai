@@ -31,12 +31,16 @@ the agent has already relied on the old one. The check has to happen before the 
   observation is recorded as an occurrence, so what was compared can be inspected afterwards.
 - **`sulai record <directory> <page|->` records against a fresh observation** of the same roots. The
   parent is the one head; with several, it must be named with `--parent`. The check of ADR 0008
-  applies unchanged.
+  applies unchanged. A locator written without its backticks is refused: a page records only code
+  spans as citations, so it would be recorded as plain text, citing nothing.
 - **In a Git project the evidence is the commit.** A citation into a file with uncommitted changes
   would resolve against committed text the writer may not have read, so `record` refuses it unless
   `--allow-uncommitted` is given. The working tree is never captured.
-- **The store stays out of the project's history.** `init` writes `.sulai/.gitignore` holding `*`,
-  so an agent that commits everything does not commit the store. It is not part of the format.
+- **The store stays out of the project's history, and says how to read it.** `init` writes
+  `.sulai/.gitignore` holding `*`, so an agent that commits everything does not commit the store,
+  and `.sulai/README.md`, which tells an agent that finds the store to read it through
+  `sulai orient`. An agent that reads the store's files directly gets the state unchecked and never
+  learns there is a command. Neither file is part of the format.
 - **`init` and `orient` name the next step,** so an agent needs no instructions beyond the
   commands. `status`, which prints the state as recorded without observing anything, says that it
   is unchecked and that `orient` checks it.

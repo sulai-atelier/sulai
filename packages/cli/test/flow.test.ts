@@ -226,6 +226,11 @@ test(
     git(repo, 'add', '-A');
     assert.equal(git(repo, 'diff', '--cached', '--name-only'), '');
     assert.equal(git(repo, 'status', '--porcelain'), '');
+    // An agent that finds the store is told to read it through Sulai.
+    assert.match(
+      await readFile(join(repo, '.sulai', 'README.md'), 'utf8'),
+      /read the project's state through the `sulai` command[\s\S]*sulai orient \./,
+    );
 
     const base = await mkdtemp(join(tmpdir(), 'sulai-flow-'));
     t.after(() => rm(base, { recursive: true, force: true }));
@@ -235,6 +240,37 @@ test(
       await readFile(join(base, '.sulai', '.gitignore'), 'utf8'),
       'artifacts/\n',
     );
+  },
+);
+
+test(
+  'a citation written without backticks is refused, so no page records citing nothing',
+  { skip },
+  async (t) => {
+    const repo = await project(t);
+    await assert.rejects(
+      recordNext(repo, Buffer.from(FIRST.replaceAll('`', ''))),
+      /2 citation\(s\) are not in backticks[\s\S]*r1\/src\/config\.js#L3\n {2}r1\/src\/config\.js#L4/,
+    );
+    // One left bare beside a proper one is refused too.
+    await assert.rejects(
+      recordNext(
+        repo,
+        Buffer.from(
+          'Lists sort by date. `r1/src/config.js#L3`, see r1/README.md#L1.\n',
+        ),
+      ),
+      /1 citation\(s\) are not in backticks[\s\S]*r1\/README\.md#L1\n/,
+    );
+    assert.deepEqual(await states(repo), []);
+    // Text that only resembles a locator is not mistaken for one.
+    const plain = await recordNext(
+      repo,
+      Buffer.from(
+        'Release br1#L2 and r1#Lx are names. `r1/src/config.js#L3`\n',
+      ),
+    );
+    assert.equal(plain.references.total, 1);
   },
 );
 
