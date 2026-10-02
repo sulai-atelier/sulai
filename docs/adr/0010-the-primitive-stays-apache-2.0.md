@@ -23,12 +23,16 @@ does.
 
 The primitive is:
 
-- **The formats:** the records and the local storage defined in [docs/format.md](../format.md),
-  including future versions of them published in this repository.
-- **The specifications** needed to implement Sulai independently: `docs/format.md`, with
-  `docs/architecture.md` and these decision records.
-- **The reference implementation:** the deterministic local engine, library and command line in
-  `packages/core` and `packages/cli`.
+- **The formats:** the records and the local storage of a Sulai project, including future versions
+  of them published in this repository. They are currently defined in [docs/format.md](../format.md).
+- **The specifications** needed to implement Sulai independently, wherever they are kept. Currently
+  they are `docs/format.md`, with `docs/architecture.md` and these decision records.
+- **The reference implementation:** the canonical deterministic local implementation of the
+  primitive, its engine, library and command line, including any code that replaces those
+  components in implementing the committed formats. It is currently in `packages/core` and
+  `packages/cli`.
+
+Moving or renaming any of these does not narrow the commitment.
 
 **Outside this commitment:**
 
