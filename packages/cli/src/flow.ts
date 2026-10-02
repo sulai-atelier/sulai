@@ -142,6 +142,26 @@ function describe(observed: Observation) {
   return { occurrence: observed.occurrenceId, roots: observed.roots };
 }
 
+/** Text shaped like a locator, which is a citation only inside backticks. */
+const BARE_LOCATOR =
+  /(?<![\w/.-])r[1-9][0-9]*(?:\/[^\s`#]+)?#L[0-9]+(?:-L[0-9]+)?(?![\w-])/g;
+
+/**
+ * Locators written outside code spans. A page records only code spans as
+ * citations, so these would be recorded as plain text, citing nothing.
+ */
+function bareLocators(page: string) {
+  const found = new Set<string>();
+  for (const line of page.split('\n')) {
+    for (const match of line
+      .replace(/`[^`\n]+`/g, ' ')
+      .matchAll(BARE_LOCATOR)) {
+      found.add(match[0]);
+    }
+  }
+  return [...found];
+}
+
 /**
  * The citations of a page that point into files Git reports as changed but
  * not committed. They resolve against the commit, not the text in the folder.
@@ -241,9 +261,10 @@ export async function orient(directory: string) {
 
 /**
  * Records the next revision against a fresh observation of the project. The
- * parent is the one head, or the one named. A citation into a file that Git
- * reports as changed but not committed would resolve against the committed
- * text, not the text the writer read, so it is refused unless
+ * parent is the one head, or the one named. A locator written without its
+ * backticks is refused, since it would cite nothing. A citation into a file
+ * that Git reports as changed but not committed would resolve against the
+ * committed text, not the text the writer read, so it is refused unless
  * `allowUncommitted` says to record anyway. A citation kept from the parent
  * that now cites different text is refused as `sulai state record` refuses it.
  */
@@ -284,6 +305,12 @@ export async function recordNext(
     );
   } catch {
     throw new ValidationError('A state page must be UTF-8 text');
+  }
+  const bare = bareLocators(page);
+  if (bare.length > 0) {
+    throw new ValidationError(
+      `${bare.length} citation(s) are not in backticks, so they would be recorded as plain text, citing nothing:\n  ${bare.join('\n  ')}\nPut each one in backticks, as \`r1/<path>#L<first>-L<last>\`.`,
+    );
   }
   const observed = await observe(
     project,

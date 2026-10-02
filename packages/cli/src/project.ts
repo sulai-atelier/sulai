@@ -38,6 +38,20 @@ const PROJECT_FILE = projectMarker(PROJECT_VERSION);
 /** Asks Git to ignore the whole store, this file included. */
 const GIT_IGNORE = Buffer.from('*\n');
 
+/** Tells whoever finds the store, most likely an agent, how to read it. */
+const README = Buffer.from(`# Sulai
+
+This folder is Sulai's store for the project around it. Its files are records,
+not notes: read the project's state through the \`sulai\` command, which first
+checks it against the project as it is now. From the project folder:
+
+    sulai orient .            where the project stands, and what moved
+    sulai record . <page|->   record the next state
+    sulai --help              everything else
+
+Nothing here is meant to be read or edited by hand.
+`);
+
 export function paths(directory: string) {
   const root = resolve(directory);
   const store = join(root, '.sulai');
@@ -50,6 +64,7 @@ export function paths(directory: string) {
     temporary: join(store, 'tmp'),
     marker: join(store, 'project.json'),
     ignore: join(store, '.gitignore'),
+    readme: join(store, 'README.md'),
   };
 }
 
@@ -121,13 +136,19 @@ export async function initializeProject(directory: string) {
     project.marker,
     PROJECT_FILE,
   );
-  // In a repository, committing everything must not commit the store. Not
-  // part of the format: nothing reads it, and one already there is kept.
-  try {
-    await lstat(project.ignore);
-  } catch (error) {
-    if (!hasCode(error, 'ENOENT')) throw error;
-    await writeImmutable(project.temporary, project.ignore, GIT_IGNORE);
+  // In a repository, committing everything must not commit the store, and an
+  // agent that finds the store must learn to read it through Sulai. Not part
+  // of the format: nothing reads these, and a file already there is kept.
+  for (const [path, bytes] of [
+    [project.ignore, GIT_IGNORE],
+    [project.readme, README],
+  ] as const) {
+    try {
+      await lstat(path);
+    } catch (error) {
+      if (!hasCode(error, 'ENOENT')) throw error;
+      await writeImmutable(project.temporary, path, bytes);
+    }
   }
   return { directory: project.root, created };
 }
