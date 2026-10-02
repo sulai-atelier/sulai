@@ -1,6 +1,7 @@
 # ADR 0011: Orientation checks the state before serving it
 
-Status: Accepted. Adds `sulai orient` and `sulai record`; the storage format is unchanged.
+Status: Accepted. Adds `sulai orient` and `sulai record`. What they observe in a Git project is
+[ADR 0012](0012-a-git-working-tree-is-its-own-source.md).
 
 ## Context
 
@@ -17,14 +18,12 @@ the agent has already relied on the old one. The check has to happen before the 
 
 ## Decision
 
-- **`sulai orient <directory>` observes, checks, then serves.** It acquires the roots the head
-  revision was recorded against, or, before any revision, the project itself: the commit at HEAD
-  when the project is a Git repository, otherwise its folder. It resolves every citation on each
-  head's page against that observation and returns each head with its page and:
+- **`sulai orient <directory>` observes, checks, then serves.** It observes the project as it is
+  now: the roots the head revision was recorded against, or, before any revision, the project
+  itself, a Git repository's working tree (ADR 0012) or otherwise its folder. It resolves every
+  citation on each head's page against that observation and returns each head with its page and:
   - `changed`: each citation that resolved before and now resolves to different bytes, or not at
     all, with the text it cited and the text there now;
-  - `uncommitted`: each citation into a file Git reports as changed but not committed, which the
-    commit cannot speak for;
   - `unresolved`: the citations that did not resolve when the revision was recorded.
 - **Nothing is decided or repaired.** No citation is retargeted and no revision is written. Sulai
   says which recorded evidence no longer matches; what the change means is for the reader. The
@@ -33,9 +32,6 @@ the agent has already relied on the old one. The check has to happen before the 
   parent is the one head; with several, it must be named with `--parent`. The check of ADR 0008
   applies unchanged. A locator written without its backticks is refused: a page records only code
   spans as citations, so it would be recorded as plain text, citing nothing.
-- **In a Git project the evidence is the commit.** A citation into a file with uncommitted changes
-  would resolve against committed text the writer may not have read, so `record` refuses it unless
-  `--allow-uncommitted` is given. The working tree is never captured.
 - **The store stays out of the project's history, and says how to read it.** `init` writes
   `.sulai/.gitignore` holding `*`, so an agent that commits everything does not commit the store,
   and `.sulai/README.md`, which tells an agent that finds the store to read it through
@@ -54,9 +50,6 @@ next time anyone orients, before the page is relied on, whoever made the change.
 Each orientation records an occurrence. Unchanged files are stored once, but each occurrence lists
 every captured path, so the store grows by one listing per orientation.
 
-An agent must commit what it cites. If that proves to be real friction, capturing the working tree is
-the alternative below.
-
 A page that keeps citing a changed line, because its claim was rewritten to match the new text,
 still needs `--allow-changed-citations`, and the flag covers the whole page rather than one citation.
 
@@ -65,9 +58,9 @@ still needs `--allow-changed-citations`, and the flag covers the whole page rath
 **Checking only when recording.** Rejected: it misses the case that matters, a stale state read and
 acted on before anything new is recorded.
 
-**Capturing the working tree.** It would let an agent cite uncommitted work. Deferred: it needs a new
-kind of root, with rules for ignored and generated files, and so a format change. It should follow a
-real case where committing first costs too much.
+**Taking a Git project's evidence from the commit at HEAD.** Tried first, and replaced by ADR 0012:
+an agent's work is uncommitted until someone commits it, so the agent had to commit unasked or stop
+and ask before its state could cite what it had read.
 
 **Repairing moved citations by finding the old text.** Rejected for the reasons in ADR 0008.
 
