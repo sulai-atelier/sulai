@@ -39,6 +39,12 @@ for (const file of ['README.md', 'LICENSE', 'NOTICE']) {
 const bundled = {};
 for (const name of libraries) {
   const manifest = read(`packages/${name}/package.json`);
+  // A bundled library supports exactly the Node versions the command does.
+  if (manifest.engines?.node !== cli.engines.node) {
+    throw new Error(
+      `${manifest.name} supports Node ${manifest.engines?.node}, but the command supports ${cli.engines.node}`,
+    );
+  }
   const target = join(staging, 'node_modules', manifest.name);
   mkdirSync(target, { recursive: true });
   cpSync(join(root, `packages/${name}/dist`), join(target, 'dist'), {

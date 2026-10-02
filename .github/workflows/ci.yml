@@ -15,20 +15,24 @@ concurrency:
 
 jobs:
   check:
-    name: Check (${{ matrix.os }})
+    name: Check (${{ matrix.os }}${{ matrix.node && format(', Node {0}', matrix.node) || '' }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
+        # Empty is the version in .node-version, the lowest supported; 26 is the
+        # other supported line.
+        node: ['', '26']
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           persist-credentials: false
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
-          node-version-file: .node-version
+          node-version: ${{ matrix.node }}
+          node-version-file: ${{ !matrix.node && '.node-version' || '' }}
           cache: npm
       - run: npm ci --ignore-scripts
       - run: npm run format:check
