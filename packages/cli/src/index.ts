@@ -2,6 +2,7 @@
 export { importArtifactFile, readStoredArtifact } from './artifacts.js';
 export { importPath, importPaths } from './acquire.js';
 export type { AcquisitionRoot } from './acquire.js';
+export { orient, recordNext } from './flow.js';
 export {
   inspectArtifact,
   inspectOccurrence,

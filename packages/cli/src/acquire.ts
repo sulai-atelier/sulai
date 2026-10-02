@@ -229,14 +229,14 @@ async function checkWorktrees(
   roots: readonly CheckedRoot[],
   storePath: string,
   allowUncommitted: boolean,
-): Promise<Map<string, WorktreeState>> {
-  const states = new Map<string, WorktreeState>();
+): Promise<Map<string, { state: WorktreeState; changes: string[] }>> {
+  const states = new Map<string, { state: WorktreeState; changes: string[] }>();
   const store = await realpath(storePath);
   for (const root of roots) {
     if (root.source !== 'git') continue;
     const { commit } = root;
     if (commit.bare) {
-      states.set(root.id, 'absent');
+      states.set(root.id, { state: 'absent', changes: [] });
       continue;
     }
     // The project's own store is not the user's work, even when untracked.
@@ -251,7 +251,10 @@ async function checkWorktrees(
         `${root.id} (${root.locator}): the working tree differs from commit ${commit.commit.slice(0, 12)} in ${changes.length} path(s): ${shown}${more}. Commit first, or capture the commit anyway with --allow-uncommitted.`,
       );
     }
-    states.set(root.id, changes.length > 0 ? 'differs' : 'clean');
+    states.set(root.id, {
+      state: changes.length > 0 ? 'differs' : 'clean',
+      changes,
+    });
   }
   return states;
 }
@@ -515,7 +518,7 @@ export async function importPaths(
             objectFormat: root.commit.objectFormat,
             commit: root.commit.commit,
             tree: root.commit.tree,
-            worktree: worktrees.get(root.id),
+            worktree: worktrees.get(root.id)?.state,
             platform: process.platform,
             locator: root.locator,
           }
@@ -546,14 +549,19 @@ export async function importPaths(
       root.source === 'git'
         ? {
             id: root.id,
-            source: root.source,
+            source: 'git' as const,
             locator: root.locator,
             commit: root.commit,
             worktree: root.worktree,
+            // What differs is reported, not recorded: the record keeps only
+            // whether the working tree matched.
+            ...(root.worktree === 'differs'
+              ? { uncommitted: worktrees.get(root.id)?.changes ?? [] }
+              : {}),
           }
         : {
             id: root.id,
-            source: 'filesystem',
+            source: 'filesystem' as const,
             kind: root.kind,
             locator: root.locator,
           },

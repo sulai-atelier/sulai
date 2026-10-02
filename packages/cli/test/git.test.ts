@@ -447,6 +447,8 @@ test(
     const { base } = await setup(t);
     const repo = await repository(base, { 'a.txt': 'a\n', 'b.txt': 'b\n' });
     await initializeProject(repo);
+    // A store made before init asked Git to ignore it is untracked instead.
+    await rm(join(repo, '.sulai', '.gitignore'));
     for (let index = 0; index < 3; index += 1) {
       const result = await importPaths(repo, [{ git: repo }]);
       assert.equal(worktree(result), 'clean');

@@ -11,13 +11,34 @@ import {
   inspectProject,
   inspectState,
   interpretConversation,
+  orient,
   projectStatus,
+  recordNext,
   recordState,
   upgradeProject,
 } from './index.js';
 import type { AcquisitionRoot } from './index.js';
 
 const usage = `Usage:
+  sulai init <directory>                       once, to create the project's store
+  sulai orient <directory>                     where the project stands: observes the
+                                               project, checks the current state's
+                                               citations against it, and prints the
+                                               state with every citation whose
+                                               evidence moved
+  sulai record <directory> <page|->            record the next page, from a file or
+               [--parent <state-id>]           standard input, against the project
+               [--allow-changed-citations]     as it is now
+               [--allow-uncommitted]
+
+These three are how the agent working on a project keeps its state. Write each
+page from the previous one, changing only the lines that changed. Cite the
+evidence for each claim as \`r1/<path>#L<first>-L<last>\`, against the roots
+orient lists. In a Git project the committed files are the evidence, so commit
+what a citation points at before recording. Sulai reports what moved; it never
+decides what a change means or repairs the state.
+
+Every command:
   sulai init <directory>
   sulai import <directory> <root>... [--allow-uncommitted]
                                                preserve every root and record
@@ -183,6 +204,29 @@ async function main(args: string[]): Promise<void> {
       from,
       named.get('parent'),
       { allowChangedCitations: switches.has('allow-changed-citations') },
+    );
+  } else if (
+    command === 'orient' &&
+    directory !== undefined &&
+    args.length === 2
+  ) {
+    result = await orient(directory);
+  } else if (command === 'record') {
+    const { positional, named, switches } = options(
+      args.slice(1),
+      ['parent'],
+      ['allow-changed-citations', 'allow-uncommitted'],
+    );
+    if (positional.length !== 2) throw new Error(usage.trimEnd());
+    const page = positional[1] as string;
+    result = await recordNext(
+      positional[0] as string,
+      page === '-' ? await readStandardInput(MAX_STATE_PAGE_BYTES) : page,
+      {
+        parent: named.get('parent'),
+        allowChangedCitations: switches.has('allow-changed-citations'),
+        allowUncommitted: switches.has('allow-uncommitted'),
+      },
     );
   } else if (
     command === 'status' &&
