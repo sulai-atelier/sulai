@@ -59,6 +59,10 @@ in the index. This is the union Git lists with `ls-files --cached` and
 - **A symbolic link is never followed.** It is skipped with reason `symbolic-link`, as in a folder.
 - **The repository is named by its top-level working folder.** Part of a repository, a bare
   repository, and a `.git` directory are refused.
+- **An index with unmerged entries is refused.** During a merge conflict a path can hold several
+  stages at once, even a submodule in one and a file in another, so there is no single entry to
+  record for it, and this format has no way to say so. Resolving the conflict lets the working tree
+  be observed again.
 
 ### What is preserved
 
@@ -76,7 +80,11 @@ verifies them the way it verifies a folder's: against their own identity.
 A commit is atomic. A working tree is not. The record states what Sulai observed during the
 acquisition, between `startedAt` and `finishedAt`. A file that changes while it is read is skipped
 as `changed-during-read`, and a file that appears after Git listed the selection is not in the
-occurrence. `complete` means everything selected was captured, not that the tree held still.
+occurrence. An untracked file was listed from the working tree itself, so one that is gone by the
+time it is read is skipped as `vanished`, or as `changed-during-read` when a folder above it has
+become something else; the occurrence is then partial. A tracked file comes from the index, which
+lists it whether or not it exists, so a missing one is simply not selected. `complete` means
+everything selected was captured, not that the tree held still.
 
 ### How Git is run
 
@@ -152,6 +160,8 @@ The implementation is accepted when its tests show that:
 - HEAD's commit and tree are recorded, or `null` before the first commit, when untracked files are
   still preserved;
 - part of a repository and a bare repository are refused;
+- an index with unmerged entries is refused, and observed again once resolved;
+- an untracked file that vanishes after Git listed it is skipped, and the occurrence is partial;
 - a citation into a working-tree root resolves exactly as one into a folder;
 - `orient` reports an uncommitted change that moves cited evidence, with no commit by anyone;
 - state version 2 refuses to name an occurrence version 3, and state version 3 continues a version 2

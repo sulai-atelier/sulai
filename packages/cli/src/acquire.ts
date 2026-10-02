@@ -546,8 +546,10 @@ export async function importPaths(
    * Captures what Git selects in a working tree: every index entry still
    * present, and every untracked path it does not ignore. A tracked file
    * missing from the working tree is not selected; its absence is the tree's
-   * state. A submodule, or a repository nested in untracked files, is excluded
-   * and not entered. A link is skipped, never followed.
+   * state. An untracked path gone by the time it is read vanished during the
+   * acquisition, and is skipped. A submodule, or a repository nested in
+   * untracked files, is excluded and not entered. A link is skipped, never
+   * followed.
    */
   async function observe(root: WorktreeRoot): Promise<void> {
     const { folder } = root.worktree;
@@ -561,18 +563,19 @@ export async function importPaths(
     const listing = await listWorktree(root.worktree);
     const selected: {
       raw: Buffer;
+      tracked: boolean;
       submodule?: string;
       nested?: boolean;
     }[] = [
       ...listing.tracked.map((item) =>
         item.mode === '160000'
-          ? { raw: item.path, submodule: item.id }
-          : { raw: item.path },
+          ? { raw: item.path, tracked: true, submodule: item.id }
+          : { raw: item.path, tracked: true },
       ),
       ...listing.untracked.map((raw) =>
         raw.at(-1) === 0x2f
-          ? { raw: raw.subarray(0, -1), nested: true }
-          : { raw },
+          ? { raw: raw.subarray(0, -1), tracked: false, nested: true }
+          : { raw, tracked: false },
       ),
     ];
     for (const item of selected) {
@@ -609,7 +612,11 @@ export async function importPaths(
       try {
         stat = await lstat(absolute, { bigint: true });
       } catch (error) {
-        if (hasCode(error, 'ENOENT', 'ENOTDIR')) continue;
+        // The index lists a tracked path whether or not it exists, so a
+        // missing one is the working tree's state. An untracked path was
+        // listed from the working tree, so a missing one vanished during the
+        // acquisition, and must not be left out of a complete occurrence.
+        if (item.tracked && hasCode(error, 'ENOENT', 'ENOTDIR')) continue;
         const reason = listFailure(error);
         if (reason === null) throw error;
         skipped.push({ root: root.id, path, reason });

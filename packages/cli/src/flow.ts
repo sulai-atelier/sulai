@@ -211,6 +211,12 @@ export async function orient(directory: string) {
     });
   }
   const moved = results.reduce((sum, head) => sum + head.changed.length, 0);
+  // A citation that never resolved was never checked, so it cannot be said to
+  // still match.
+  const unresolved = results.reduce(
+    (sum, head) => sum + head.unresolved.length,
+    0,
+  );
   return {
     project: project.root,
     observed: [...observations.values()].map(describe),
@@ -218,7 +224,12 @@ export async function orient(directory: string) {
     next:
       (moved > 0
         ? `${moved} citation(s) no longer match the current project; each is listed under "changed" with the text it cited and the text there now. What the change means is yours to judge. A next page that keeps one of these citations is recorded with --allow-changed-citations. `
-        : 'Every citation still matches the current project. ') +
+        : unresolved > 0
+          ? 'No resolved citation has moved. '
+          : 'Every citation still matches the current project. ') +
+      (unresolved > 0
+        ? `${unresolved} citation(s) were unresolved when the state was recorded, listed under "unresolved" with the reason. `
+        : '') +
       (heads.length > 1
         ? `There are ${heads.length} heads; record the next page with --parent naming the one it continues: ${command} --parent <revision>`
         : `After changing what the project holds, write the next page from this one, changing only the lines that changed, and record it with: ${command}`),

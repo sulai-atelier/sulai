@@ -269,13 +269,18 @@ excluded as `nested-repository`; neither is entered. A symbolic link is skipped,
 never followed. The bytes are read from the filesystem as a folder walk reads
 them, so a file a filter has transformed, such as one Git LFS has smudged, is
 preserved as its working copy. The repository is named by its top-level working
-folder; part of a repository and a bare repository are refused. See
+folder; part of a repository and a bare repository are refused, and so is an index
+with unmerged entries, from a merge in progress, since a path can then hold several
+stages and there is no one entry to record. See
 [ADR 0012](adr/0012-a-git-working-tree-is-its-own-source.md).
 
 A working tree is not a snapshot. The record states what was observed between
 `startedAt` and `finishedAt`: a file that changes while it is read is skipped as
 `changed-during-read`, and one that appears after Git listed the selection is
-not in the occurrence.
+not in the occurrence. An untracked file that is gone by the time it is read was
+listed from the working tree, so it is skipped as `vanished`, or as
+`changed-during-read` when a folder above it has become something else, and the
+occurrence is partial. A missing tracked file is not selected.
 
 Git acquisition needs `git` 2.45 or later on `PATH`. Every Git command runs with
 lazy fetching, replacement objects and optional locks turned off

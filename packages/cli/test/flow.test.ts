@@ -283,6 +283,28 @@ test(
   },
 );
 
+test(
+  'orient never says every citation matches while some never resolved',
+  { skip },
+  async (t) => {
+    const repo = await project(t);
+    await recordNext(
+      repo,
+      Buffer.from(FIRST + 'Next: tags. `r1/notes/plan.md#L1`\n'),
+    );
+    const result = await orient(repo);
+    assert.deepEqual(result.heads[0]?.changed, []);
+    assert.deepEqual(result.heads[0]?.unresolved, [
+      { locator: 'r1/notes/plan.md#L1', reason: 'path-not-in-occurrence' },
+    ]);
+    assert.doesNotMatch(result.next, /Every citation still matches/);
+    assert.match(
+      result.next,
+      /^No resolved citation has moved\. 1 citation\(s\) were unresolved when the state was recorded/,
+    );
+  },
+);
+
 test('a folder that is not a repository is observed as a folder', async (t) => {
   const base = await mkdtemp(join(tmpdir(), 'sulai-flow-'));
   t.after(() => rm(base, { recursive: true, force: true }));
