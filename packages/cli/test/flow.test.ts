@@ -578,3 +578,25 @@ test(
     }
   },
 );
+
+test(
+  'a draft that cannot be read does not stop recording a page given directly',
+  { skip },
+  async (t) => {
+    const repo = await project(t);
+    const first = await recordNext(repo, Buffer.from(FIRST));
+    // Where the draft's record of itself should be, something unreadable.
+    const meta = join(repo, '.sulai', 'draft.json');
+    await rm(meta, { force: true });
+    await mkdir(meta);
+    const next = FIRST.replace('20 links', '20 links per page');
+    const second = await recordNext(repo, Buffer.from(next));
+    assert.equal(second.parent, first.id);
+    assert.equal(second.draft.refreshed, false);
+    assert.equal((await states(repo)).length, 2);
+    await assert.rejects(recordNext(repo));
+    const result = await orient(repo);
+    assert.equal(result.heads[0]?.revision, second.id);
+    assert.equal(result.draft.state, 'unavailable');
+  },
+);
