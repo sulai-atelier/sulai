@@ -51,7 +51,8 @@ Every command:
                                                record a state page, or - to read
                                                it from standard input, and
                                                exactly what evidence it cites
-  sulai status <directory>                     the current state, one page per head
+  sulai status <directory>                     the current state, one page per head,
+                                               as recorded and unchecked
   sulai why <directory> <state-id> <line>      the preserved evidence behind one
                                                line of a state page
   sulai diff <directory> <state-id> <state-id> how the state page changed
@@ -160,7 +161,10 @@ async function main(args: string[]): Promise<void> {
   let result: unknown;
   let skipped = 0;
   if (command === 'init' && directory !== undefined && args.length === 2) {
-    result = await initializeProject(directory);
+    result = {
+      ...(await initializeProject(directory)),
+      next: `See where the project stands with: sulai orient ${directory}`,
+    };
   } else if (
     command === 'import' &&
     directory !== undefined &&

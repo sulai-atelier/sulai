@@ -334,7 +334,8 @@ export async function recordState(
  * Where the project currently appears to stand: every head, meaning every
  * revision with no children, with its page and the resolution recorded when it
  * was made. Several heads are all reported; none is named the winner. The
- * cited evidence is not re-read here; `inspect` does that.
+ * cited evidence is not re-read here, and the result says so: `orient` checks
+ * the state against the project as it is now, and `inspect` checks the store.
  */
 export async function projectStatus(directory: string) {
   const project = await loadProject(directory);
@@ -348,7 +349,11 @@ export async function projectStatus(directory: string) {
       page: await readPage(project, revision.page),
     });
   }
-  return { heads };
+  return {
+    heads,
+    checked:
+      'As recorded, not checked against the project as it is now. sulai orient checks it first.',
+  };
 }
 
 /**
