@@ -1,8 +1,9 @@
 /**
- * Reading one commit from a Git repository (ADR 0009). Sulai runs `git`, but
- * relies on none of the user's configuration for what must not happen: nothing
- * is fetched, no replacement object is read, nothing is written, and no hook,
- * filter, pager or fsmonitor program runs. Only plumbing and `status` run.
+ * Reading one commit from a Git repository (ADR 0009), and listing what a
+ * working tree holds (ADR 0012). Sulai runs `git`, but relies on none of the
+ * user's configuration for what must not happen: nothing is fetched, no
+ * replacement object is read, nothing is written, and no hook, filter, pager
+ * or fsmonitor program runs. Only plumbing and `status` run.
  */
 import { execFile, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -214,12 +215,11 @@ async function head(folder: string): Promise<string | null> {
 }
 
 /**
- * Resolves HEAD, once, to the full ID of the commit it names. The path must be
- * a repository's top-level working folder, or a bare repository itself:
- * capturing part of a repository is not supported.
+ * Where a named path is as a repository: its working folder, or the repository
+ * itself when bare, and its shared Git directory. The path must be one of those
+ * exactly: part of a repository, or its `.git` directory, is refused.
  */
-export async function openCommit(input: string): Promise<GitCommit> {
-  const locator = resolve(input);
+async function locate(locator: string) {
   // A missing or too old git is its own refusal, not a fault of the folder.
   await git();
   let facts: Result;
@@ -266,25 +266,144 @@ export async function openCommit(input: string): Promise<GitCommit> {
       `${locator} is a repository's Git directory; name its working folder`,
     );
   }
+  return {
+    folder,
+    repository: await realpath(common as string),
+    bare: bare === 'true',
+    objectFormat: objectFormat(format),
+  };
+}
+
+async function treeOf(folder: string, commit: string): Promise<string> {
+  return lines(
+    (await run(['-C', folder, 'rev-parse', '--verify', `${commit}^{tree}`]))
+      .stdout,
+  )[0] as string;
+}
+
+/**
+ * Resolves HEAD, once, to the full ID of the commit it names. The path must be
+ * a repository's top-level working folder, or a bare repository itself:
+ * capturing part of a repository is not supported.
+ */
+export async function openCommit(input: string): Promise<GitCommit> {
+  const locator = resolve(input);
+  const { folder, repository, bare, objectFormat } = await locate(locator);
   const commit = await head(folder);
   if (commit === null) {
     throw new ValidationError(
       `${locator} has no commit to capture: HEAD names no commit yet`,
     );
   }
-  const tree = lines(
-    (await run(['-C', folder, 'rev-parse', '--verify', `${commit}^{tree}`]))
-      .stdout,
-  )[0] as string;
   return {
     locator,
     folder,
-    repository: await realpath(common as string),
-    bare: bare === 'true',
-    objectFormat: objectFormat(format),
+    repository,
+    bare,
+    objectFormat,
     commit,
-    tree,
+    tree: await treeOf(folder, commit),
   };
+}
+
+/** A repository's working tree, found from where the caller named it. */
+export interface GitWorktree {
+  /** The repository as named, made absolute. Where it was, not what it is. */
+  readonly locator: string;
+  /** The real path of the top-level working folder. */
+  readonly folder: string;
+  /** The real path of the shared Git directory, which identifies the repository. */
+  readonly repository: string;
+  readonly objectFormat: GitObjectFormat;
+  /** The commit HEAD names, or null before the first commit. */
+  readonly head: string | null;
+  readonly tree: string | null;
+}
+
+/**
+ * Finds a working tree and what HEAD names now (ADR 0012). The path must be
+ * the top-level working folder; a bare repository has no working tree.
+ */
+export async function openWorktree(input: string): Promise<GitWorktree> {
+  const locator = resolve(input);
+  const { folder, repository, bare, objectFormat } = await locate(locator);
+  if (bare) {
+    throw new ValidationError(
+      `${locator} is a bare repository, which has no working tree; read its commit with --git`,
+    );
+  }
+  const commit = await head(folder);
+  return {
+    locator,
+    folder,
+    repository,
+    objectFormat,
+    head: commit,
+    tree: commit === null ? null : await treeOf(folder, commit),
+  };
+}
+
+/** What Git selects in a working tree, as it names the paths. */
+export interface WorktreeListing {
+  /** Index entries, one per path: mode, object ID, and the path's bytes. */
+  readonly tracked: readonly {
+    readonly mode: string;
+    readonly id: string;
+    readonly path: Buffer;
+  }[];
+  /**
+   * Untracked paths Git does not ignore, by its standard rules. A repository
+   * nested in untracked files is named once, with a trailing `/`.
+   */
+  readonly untracked: readonly Buffer[];
+}
+
+/** Splits `-z` output into its fields, keeping each one's bytes. */
+function fields(output: Buffer): Buffer[] {
+  const items: Buffer[] = [];
+  for (let start = 0; start < output.length;) {
+    const end = output.indexOf(0, start);
+    items.push(output.subarray(start, end === -1 ? output.length : end));
+    start = end === -1 ? output.length : end + 1;
+  }
+  return items;
+}
+
+/**
+ * Lists the paths a working-tree root holds: every index entry, and every
+ * untracked path Git does not ignore. Only `ls-files` runs. It reads the index
+ * and walks the folder with Git's ignore rules, reads no file's content, runs
+ * no filter, and writes nothing. Ignored files are never listed.
+ */
+export async function listWorktree(
+  worktree: GitWorktree,
+): Promise<WorktreeListing> {
+  const tooLarge = 'The working tree is too large to record as one occurrence';
+  const staged = await run(
+    ['-C', worktree.folder, 'ls-files', '-z', '--stage'],
+    { tooLarge },
+  );
+  const tracked = [];
+  const seen = new Set<string>();
+  for (const item of fields(staged.stdout)) {
+    const tab = item.indexOf(0x09);
+    const [mode, id] =
+      tab === -1 ? [] : item.subarray(0, tab).toString('latin1').split(' ');
+    if (id === undefined) {
+      throw new ValidationError('git ls-files printed an unexpected line');
+    }
+    const path = item.subarray(tab + 1);
+    // A conflicted path has an entry per stage; the working tree has one file.
+    const key = path.toString('latin1');
+    if (seen.has(key)) continue;
+    seen.add(key);
+    tracked.push({ mode: mode as string, id, path });
+  }
+  const others = await run(
+    ['-C', worktree.folder, 'ls-files', '-z', '--others', '--exclude-standard'],
+    { tooLarge },
+  );
+  return { tracked, untracked: fields(others.stdout) };
 }
 
 /**

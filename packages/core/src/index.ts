@@ -18,6 +18,7 @@ export {
   OCCURRENCE_FORMAT,
   OCCURRENCE_VERSION,
   SKIP_REASONS,
+  WORKTREE_SELECTIONS,
   WORKTREE_STATES,
   encodeOccurrence,
   occurrenceIdOf,
@@ -32,6 +33,8 @@ export type {
   GitEntry,
   GitObjectFormat,
   GitRoot,
+  GitWorktreeRoot,
+  NestedRepositoryExclusion,
   Occurrence,
   OccurrenceEntry,
   OccurrenceExclusion,
@@ -42,6 +45,7 @@ export type {
   SkipReason,
   StoreExclusion,
   SubmoduleExclusion,
+  WorktreeSelection,
   WorktreeState,
 } from './occurrence.js';
 export {

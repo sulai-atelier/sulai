@@ -96,7 +96,7 @@ const states = async (repo: string) =>
   (await readdir(join(repo, '.sulai', 'states'))).sort();
 
 test(
-  'with no state yet, orient observes the commit and says how to start',
+  'with no state yet, orient observes the working tree and says how to start',
   { skip },
   async (t) => {
     const repo = await project(t);
@@ -104,7 +104,11 @@ test(
     assert.deepEqual(result.heads, []);
     assert.equal(result.observed.length, 1);
     const [root] = result.observed[0]?.roots ?? [];
-    assert.equal(root?.source === 'git' && root.worktree, 'clean');
+    assert.equal(root?.source, 'git-worktree');
+    assert.equal(
+      root?.source === 'git-worktree' && root.head,
+      git(repo, 'rev-parse', 'HEAD'),
+    );
     assert.match(result.next, /No state is recorded yet/);
     assert.match(result.next, /sulai record /);
     assert.deepEqual(await states(repo), []);
@@ -132,7 +136,6 @@ test(
     const [head] = result.heads;
     assert.equal(head?.revision, first.id);
     assert.equal(head?.page, FIRST);
-    assert.deepEqual(head?.uncommitted, []);
     assert.equal(head?.changed.length, 1);
     const changed = head?.changed[0];
     assert.equal(changed?.locator, 'r1/src/config.js#L3');
@@ -173,46 +176,52 @@ test(
 );
 
 test(
-  'a citation into uncommitted work is reported by orient and refused by record unless allowed',
+  'uncommitted work is cited as it is, and an uncommitted change that moves it is reported, with nothing committed',
   { skip },
   async (t) => {
     const repo = await project(t);
-    await recordNext(repo, Buffer.from(FIRST));
-    await writeFile(join(repo, 'src', 'config.js'), CONFIG('title'));
+    const commits = git(repo, 'rev-list', '--count', 'HEAD');
+    // The agent's own work, written and not committed, and a new untracked note.
+    await writeFile(
+      join(repo, 'src', 'config.js'),
+      CONFIG('date').replace('// Settings', '// Decided: date. Settings'),
+    );
     await tree(repo, { 'notes/plan.md': 'Try tags next.\n' });
+    const page =
+      FIRST + 'Why: `r1/src/config.js#L1`\nNext: tags. `r1/notes/plan.md#L1`\n';
+    const first = await recordNext(repo, Buffer.from(page));
+    assert.deepEqual(first.references.unresolved, []);
+    assert.equal(first.references.resolved, 4);
+    const why = first.observed.roots[0];
+    assert.equal(why?.source, 'git-worktree');
 
+    // Someone else changes the decision in the working tree, and commits nothing.
+    await writeFile(
+      join(repo, 'src', 'config.js'),
+      CONFIG('title').replace('// Settings', '// Decided: date. Settings'),
+    );
+    const recorded = await states(repo);
     const result = await orient(repo);
     const [head] = result.heads;
-    // The commit still holds date, so nothing moved there; the folder differs.
-    assert.deepEqual(head?.changed, []);
-    assert.deepEqual(head?.uncommitted, [
-      'r1/src/config.js#L3',
-      'r1/src/config.js#L4',
-    ]);
-    assert.doesNotMatch(result.next, /Every citation still matches/);
-    assert.match(result.next, /checked against the commit only/);
-    const [root] = result.observed[0]?.roots ?? [];
-    assert.equal(root?.source === 'git' && root.worktree, 'differs');
-    assert.deepEqual(root?.source === 'git' ? root.uncommitted : undefined, [
-      'src/config.js',
-      'notes/',
-    ]);
-
-    const page = FIRST + 'Next: tags. `r1/notes/plan.md#L1`\n';
-    const recorded = await states(repo);
-    await assert.rejects(
-      recordNext(repo, Buffer.from(page)),
-      /3 citation\(s\) point into files changed but not committed/,
+    assert.deepEqual(
+      head?.changed.map((item) => [
+        item.locator,
+        item.cited?.text,
+        'text' in (item.current ?? {})
+          ? (item.current as { text: string }).text
+          : undefined,
+      ]),
+      [
+        [
+          'r1/src/config.js#L3',
+          "export const LIST_SORT = 'date';",
+          "export const LIST_SORT = 'title';",
+        ],
+      ],
     );
     assert.deepEqual(await states(repo), recorded);
-    const anyway = await recordNext(repo, Buffer.from(page), {
-      allowUncommitted: true,
-    });
-    // Recorded against the commit: the untracked note cannot resolve.
-    assert.deepEqual(
-      anyway.references.unresolved.map((item) => item.locator),
-      ['r1/notes/plan.md#L1'],
-    );
+    assert.equal(git(repo, 'rev-list', '--count', 'HEAD'), commits);
+    assert.equal(git(repo, 'status', '--porcelain', '--', '.sulai'), '');
   },
 );
 

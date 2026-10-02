@@ -311,7 +311,7 @@ export async function recordState(
     revision,
   } = encodeStateRevision({
     format: 'sulai.state',
-    version: 2,
+    version: 3,
     parent: parentId,
     createdAt: new Date().toISOString(),
     page: pageId,
@@ -395,8 +395,10 @@ export async function explainLine(
     const where = {
       root: parsed?.root,
       locator: root?.locator,
-      // Evidence from a Git root is the commit's, not the folder's as it is now.
+      // Evidence from a Git root is the commit's, not the folder's as it is now;
+      // from a working tree, it is the tree's, and HEAD is where it stood.
       ...(root?.source === 'git' ? { commit: root.commit } : {}),
+      ...(root?.source === 'git-worktree' ? { head: root.head } : {}),
       path: parsed?.path,
     };
     if (reference.status === 'unresolved') {

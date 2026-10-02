@@ -29,14 +29,13 @@ const usage = `Usage:
   sulai record <directory> <page|->            record the next page, from a file or
                [--parent <state-id>]           standard input, against the project
                [--allow-changed-citations]     as it is now
-               [--allow-uncommitted]
 
 These three are how the agent working on a project keeps its state. Write each
 page from the previous one, changing only the lines that changed. Cite the
 evidence for each claim as \`r1/<path>#L<first>-L<last>\`, against the roots
-orient lists. In a Git project the committed files are the evidence, so commit
-what a citation points at before recording. Sulai reports what moved; it never
-decides what a change means or repairs the state.
+orient lists. In a Git project Sulai reads the working tree as it is, so nothing
+needs committing first. Sulai reports what moved; it never decides what a change
+means or repairs the state.
 
 Every command:
   sulai init <directory>
@@ -44,8 +43,10 @@ Every command:
                                                preserve every root and record
                                                the acquisition as one occurrence;
                                                a root is a file or directory
-                                               path, or --git <repository> for
-                                               the commit at its HEAD
+                                               path, --git <repository> for the
+                                               commit at its HEAD, or
+                                               --worktree <repository> for its
+                                               working tree
   sulai state record <directory> <page> --from <occurrence-id>
                      [--parent <state-id>] [--allow-changed-citations]
                                                record a state page, or - to read
@@ -60,8 +61,8 @@ Every command:
                                                of the project, an artifact, an
                                                occurrence, or a state
   sulai interpret <directory> <artifact-id>    read an artifact as a conversation
-  sulai upgrade <directory>                    verify a storage format 4 project,
-                                               then mark it format 5
+  sulai upgrade <directory>                    verify a storage format 4 or 5
+                                               project, then mark it format 6
 
 Experimental, unstable, may be removed:
   sulai experimental claude-code-session <directory> <artifact-id>
@@ -77,6 +78,11 @@ With --git, import reads the commit at the repository's HEAD through Git, not
 the working folder: every tracked file as committed, and nothing untracked or
 ignored. It never fetches. It is refused while the working tree differs from
 that commit, unless --allow-uncommitted is given.
+
+With --worktree, import observes the repository's working tree: every tracked
+file present and every untracked file Git does not ignore, preserved as the
+bytes in the working tree, committed or not. Ignored files are never listed,
+and submodules and nested repositories are not entered.
 
 A state revision records a view of where a project stands and what it cites:
 each reference, written \`rN/path#La-Lb\` against one occurrence, is resolved to
@@ -170,7 +176,7 @@ async function main(args: string[]): Promise<void> {
     directory !== undefined &&
     args.length >= 3
   ) {
-    // Roots keep the order given, so paths and --git roots number together.
+    // Roots keep the order given, so every kind of root numbers together.
     const roots: AcquisitionRoot[] = [];
     let allowUncommitted = false;
     for (let index = 2; index < args.length; index += 1) {
@@ -178,6 +184,9 @@ async function main(args: string[]): Promise<void> {
       const repository = args[index + 1];
       if (arg === '--git' && repository !== undefined) {
         roots.push({ git: repository });
+        index += 1;
+      } else if (arg === '--worktree' && repository !== undefined) {
+        roots.push({ worktree: repository });
         index += 1;
       } else if (arg === '--allow-uncommitted' && !allowUncommitted) {
         allowUncommitted = true;
@@ -219,7 +228,7 @@ async function main(args: string[]): Promise<void> {
     const { positional, named, switches } = options(
       args.slice(1),
       ['parent'],
-      ['allow-changed-citations', 'allow-uncommitted'],
+      ['allow-changed-citations'],
     );
     if (positional.length !== 2) throw new Error(usage.trimEnd());
     const page = positional[1] as string;
@@ -229,7 +238,6 @@ async function main(args: string[]): Promise<void> {
       {
         parent: named.get('parent'),
         allowChangedCitations: switches.has('allow-changed-citations'),
-        allowUncommitted: switches.has('allow-uncommitted'),
       },
     );
   } else if (

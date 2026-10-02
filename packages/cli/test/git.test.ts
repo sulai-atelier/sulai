@@ -185,7 +185,7 @@ test(
     assert.equal(result.entryCount, 4);
 
     const record = await inspectOccurrence(directory, result.occurrenceId);
-    assert.equal(record.version, 2);
+    assert.equal(record.version, 3);
     assert.deepEqual(record.roots, [
       {
         id: 'r1',
@@ -809,7 +809,7 @@ test(
     const page = Buffer.from('The plan: `r1/notes.md#L2-L3`.\n');
     const first = await recordState(directory, page, fromGit.occurrenceId);
     const second = await recordState(directory, page, fromFolder.occurrenceId);
-    assert.match(first.id, /^state:v2:/);
+    assert.match(first.id, /^state:v3:/);
     assert.equal(second.parent, first.id);
     assert.deepEqual(
       (await inspectState(directory, first.id)).references,

@@ -1,7 +1,7 @@
 /**
  * Acquisition: checking the roots a caller names, walking folders without
- * following links or reading one commit of a repository, preserving every
- * input, and recording the attempt as one occurrence.
+ * following links, reading one commit of a repository or observing its working
+ * tree, preserving every input, and recording the attempt as one occurrence.
  */
 import { randomBytes } from 'node:crypto';
 import { lstat, readdir, realpath } from 'node:fs/promises';
@@ -17,8 +17,15 @@ import type {
   SkipReason,
   WorktreeState,
 } from '@sulai/core';
-import { listTree, openCommit, readBlobs, worktreeChanges } from './git.js';
-import type { GitCommit } from './git.js';
+import {
+  listTree,
+  listWorktree,
+  openCommit,
+  openWorktree,
+  readBlobs,
+  worktreeChanges,
+} from './git.js';
+import type { GitCommit, GitWorktree } from './git.js';
 import { occurrencePath } from './occurrences.js';
 import { loadProject } from './project.js';
 import {
@@ -36,10 +43,11 @@ import {
 import type { Staged, StagedArtifact } from './store.js';
 
 /**
- * A root to acquire: the path of a file or a folder, or a Git repository whose
- * HEAD commit is read rather than its working folder.
+ * A root to acquire: the path of a file or a folder, a Git repository whose
+ * HEAD commit is read, or a Git repository whose working tree is observed.
  */
-export type AcquisitionRoot = string | { readonly git: string };
+export type AcquisitionRoot =
+  string | { readonly git: string } | { readonly worktree: string };
 
 /** Why an input that was listed could not be opened, or null for a real fault. */
 function openFailure(error: unknown): SkipReason | null {
@@ -100,7 +108,20 @@ interface CommitRoot {
   readonly ino: bigint;
 }
 
-type CheckedRoot = FolderRoot | CommitRoot;
+interface WorktreeRoot {
+  readonly source: 'git-worktree';
+  readonly id: string;
+  readonly locator: string;
+  readonly worktree: GitWorktree;
+  readonly dev: bigint;
+  readonly ino: bigint;
+}
+
+type CheckedRoot = FolderRoot | CommitRoot | WorktreeRoot;
+
+/** The folder a Git root's repository occupies on disk. */
+const gitFolder = (root: CommitRoot | WorktreeRoot) =>
+  root.source === 'git' ? root.commit.folder : root.worktree.folder;
 
 const sameDirectory = (
   a: { dev: bigint; ino: bigint },
@@ -117,15 +138,24 @@ function conflict(a: CheckedRoot, b: CheckedRoot): string | null {
       ? 'are the same commit of the same repository'
       : null;
   }
-  if (a.source === 'git' || b.source === 'git') {
-    const [commit, folder] = (a.source === 'git' ? [a, b] : [b, a]) as [
-      CommitRoot,
-      FolderRoot,
-    ];
+  if (a.source === 'git-worktree' && b.source === 'git-worktree') {
+    return a.worktree.folder === b.worktree.folder
+      ? 'are the same working tree'
+      : null;
+  }
+  if (a.source !== 'filesystem' && b.source !== 'filesystem') {
+    // A commit and a working tree answer different questions, even about one
+    // repository, so both can be evidence together.
+    return null;
+  }
+  if (a.source !== 'filesystem' || b.source !== 'filesystem') {
+    const [repository, folder] = (
+      a.source === 'filesystem' ? [b, a] : [a, b]
+    ) as [CommitRoot | WorktreeRoot, FolderRoot];
+    const top = gitFolder(repository);
     const meets =
-      isWithin(commit.commit.folder, folder.real) ||
-      (folder.kind === 'directory' &&
-        isWithin(folder.real, commit.commit.folder));
+      isWithin(top, folder.real) ||
+      (folder.kind === 'directory' && isWithin(folder.real, top));
     return meets
       ? "overlap; a folder root cannot lie inside or contain a Git root's repository"
       : null;
@@ -161,17 +191,34 @@ async function checkRoots(
     const named =
       typeof input === 'string'
         ? input
-        : typeof input === 'object' &&
-            input !== null &&
-            typeof input.git === 'string'
-          ? input.git
+        : typeof input === 'object' && input !== null
+          ? 'git' in input && typeof input.git === 'string'
+            ? input.git
+            : 'worktree' in input && typeof input.worktree === 'string'
+              ? input.worktree
+              : null
           : null;
     if (named === null) {
-      throw new ValidationError('Each root is a path, or { git: path }');
+      throw new ValidationError(
+        'Each root is a path, { git: path } or { worktree: path }',
+      );
     }
     const locator = resolve(named);
     if (isWithin(storePath, locator)) {
       throw new ValidationError('Cannot acquire from inside the project store');
+    }
+    if (typeof input !== 'string' && 'worktree' in input) {
+      const worktree = await openWorktree(locator);
+      const stat = await lstat(worktree.folder, { bigint: true });
+      roots.push({
+        source: 'git-worktree',
+        id,
+        locator,
+        worktree,
+        dev: stat.dev,
+        ino: stat.ino,
+      });
+      continue;
     }
     if (typeof input !== 'string') {
       const commit = await openCommit(locator);
@@ -278,6 +325,12 @@ async function checkWorktrees(
  * the working tree differs from that commit, the acquisition is refused unless
  * `allowUncommitted` is set, and the record says which it was.
  *
+ * A working-tree root (ADR 0012) holds every tracked file present and every
+ * untracked file Git does not ignore, read from the working tree as a folder
+ * walk reads files. Ignored files are never listed; submodules and repositories
+ * nested in untracked files are excluded and not entered; links are skipped,
+ * never followed; the project's store is excluded even if tracked.
+ *
  * Every artifact is published before the occurrence, so an occurrence never
  * names bytes the store does not hold. The walk of a folder is not atomic.
  * Inputs that appear during it may be missed, and a complete occurrence means
@@ -303,7 +356,7 @@ export async function importPaths(
     roots.find(
       (other) =>
         other.id !== root &&
-        (other.source === 'git' || other.kind === 'directory') &&
+        (other.source !== 'filesystem' || other.kind === 'directory') &&
         sameDirectory(stat, other),
     );
 
@@ -489,8 +542,97 @@ export async function importPaths(
     }
   }
 
+  /**
+   * Captures what Git selects in a working tree: every index entry still
+   * present, and every untracked path it does not ignore. A tracked file
+   * missing from the working tree is not selected; its absence is the tree's
+   * state. A submodule, or a repository nested in untracked files, is excluded
+   * and not entered. A link is skipped, never followed.
+   */
+  async function observe(root: WorktreeRoot): Promise<void> {
+    const { folder } = root.worktree;
+    // The store is never read as evidence, even when Git would select it.
+    const store = isWithin(folder, project.store)
+      ? relative(folder, project.store).split(sep).join('/')
+      : null;
+    let storeSelected = false;
+    const listing = await listWorktree(root.worktree);
+    const selected: {
+      raw: Buffer;
+      submodule?: string;
+      nested?: boolean;
+    }[] = [
+      ...listing.tracked.map((item) =>
+        item.mode === '160000'
+          ? { raw: item.path, submodule: item.id }
+          : { raw: item.path },
+      ),
+      ...listing.untracked.map((raw) =>
+        raw.at(-1) === 0x2f
+          ? { raw: raw.subarray(0, -1), nested: true }
+          : { raw },
+      ),
+    ];
+    for (const item of selected) {
+      let path: string;
+      try {
+        path = utf8.decode(item.raw);
+      } catch {
+        skipped.push({
+          root: root.id,
+          path: item.raw.toString('utf8'),
+          reason: 'non-utf8-name',
+        });
+        continue;
+      }
+      if (store !== null && (path === store || path.startsWith(`${store}/`))) {
+        storeSelected = true;
+        continue;
+      }
+      if (item.submodule !== undefined) {
+        excluded.push({
+          root: root.id,
+          path,
+          reason: 'submodule',
+          commit: item.submodule,
+        });
+        continue;
+      }
+      if (item.nested === true) {
+        excluded.push({ root: root.id, path, reason: 'nested-repository' });
+        continue;
+      }
+      const absolute = join(folder, ...path.split('/'));
+      let stat;
+      try {
+        stat = await lstat(absolute, { bigint: true });
+      } catch (error) {
+        if (hasCode(error, 'ENOENT', 'ENOTDIR')) continue;
+        const reason = listFailure(error);
+        if (reason === null) throw error;
+        skipped.push({ root: root.id, path, reason });
+        continue;
+      }
+      if (stat.isSymbolicLink()) {
+        skipped.push({ root: root.id, path, reason: 'symbolic-link' });
+      } else if (stat.isFile()) {
+        await capture(root.id, absolute, path);
+      } else {
+        skipped.push({ root: root.id, path, reason: 'not-regular-file' });
+      }
+    }
+    if (storeSelected) {
+      excluded.push({
+        root: root.id,
+        path: store as string,
+        reason: 'project-store',
+      });
+    }
+  }
+
   for (const root of roots) {
     if (root.source === 'git') await read(root);
+    else if (root.source === 'git-worktree') await observe(root);
     else if (root.kind === 'file') await capture(root.id, root.locator, '');
     else await walk(root.id, root.locator, '');
   }
@@ -505,30 +647,41 @@ export async function importPaths(
   excluded.sort(byRootThenPath);
   const { id, bytes, occurrence } = encodeOccurrence({
     format: 'sulai.occurrence',
-    version: 2,
+    version: 3,
     nonce,
     startedAt,
     finishedAt: new Date().toISOString(),
     status: skipped.length === 0 ? 'complete' : 'partial',
     roots: roots.map((root) =>
-      root.source === 'git'
+      root.source === 'git-worktree'
         ? {
             id: root.id,
-            source: 'git',
-            objectFormat: root.commit.objectFormat,
-            commit: root.commit.commit,
-            tree: root.commit.tree,
-            worktree: worktrees.get(root.id)?.state,
+            source: 'git-worktree',
+            objectFormat: root.worktree.objectFormat,
+            head: root.worktree.head,
+            tree: root.worktree.tree,
+            selection: 'tracked-and-unignored',
             platform: process.platform,
             locator: root.locator,
           }
-        : {
-            id: root.id,
-            source: 'filesystem',
-            kind: root.kind,
-            platform: process.platform,
-            locator: root.locator,
-          },
+        : root.source === 'git'
+          ? {
+              id: root.id,
+              source: 'git',
+              objectFormat: root.commit.objectFormat,
+              commit: root.commit.commit,
+              tree: root.commit.tree,
+              worktree: worktrees.get(root.id)?.state,
+              platform: process.platform,
+              locator: root.locator,
+            }
+          : {
+              id: root.id,
+              source: 'filesystem',
+              kind: root.kind,
+              platform: process.platform,
+              locator: root.locator,
+            },
     ),
     entries,
     skipped,
@@ -546,25 +699,32 @@ export async function importPaths(
     occurrenceId: id,
     status: occurrence.status,
     roots: occurrence.roots.map((root) =>
-      root.source === 'git'
+      root.source === 'git-worktree'
         ? {
             id: root.id,
-            source: 'git' as const,
+            source: 'git-worktree' as const,
             locator: root.locator,
-            commit: root.commit,
-            worktree: root.worktree,
-            // What differs is reported, not recorded: the record keeps only
-            // whether the working tree matched.
-            ...(root.worktree === 'differs'
-              ? { uncommitted: worktrees.get(root.id)?.changes ?? [] }
-              : {}),
+            head: root.head,
           }
-        : {
-            id: root.id,
-            source: 'filesystem' as const,
-            kind: root.kind,
-            locator: root.locator,
-          },
+        : root.source === 'git'
+          ? {
+              id: root.id,
+              source: 'git' as const,
+              locator: root.locator,
+              commit: root.commit,
+              worktree: root.worktree,
+              // What differs is reported, not recorded: the record keeps only
+              // whether the working tree matched.
+              ...(root.worktree === 'differs'
+                ? { uncommitted: worktrees.get(root.id)?.changes ?? [] }
+                : {}),
+            }
+          : {
+              id: root.id,
+              source: 'filesystem' as const,
+              kind: root.kind,
+              locator: root.locator,
+            },
     ),
     entryCount: occurrence.entries.length,
     newArtifacts: distinct.filter(Boolean).length,

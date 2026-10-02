@@ -18,14 +18,16 @@ import {
  * It knows nothing about any provider.
  *
  * Version 2 adds Git roots (ADR 0009): one commit read from a repository's
- * objects, not a folder walked on disk. Version 1 records stay valid, and every
- * one of their roots is a filesystem root.
+ * objects, not a folder walked on disk. Version 3 adds Git working-tree roots
+ * (ADR 0012): the files Git selects in a working tree, preserved as the bytes
+ * present there. Earlier records stay valid; every root of a version 1 record
+ * is a filesystem root.
  */
 export const OCCURRENCE_FORMAT = 'sulai.occurrence';
 
 /** The version new records are written in. */
-export const OCCURRENCE_VERSION = 2;
-export type OccurrenceVersion = 1 | 2;
+export const OCCURRENCE_VERSION = 3;
+export type OccurrenceVersion = 1 | 2 | 3;
 
 /**
  * Bounds any in-memory read of one occurrence record. This limits a reader of
@@ -45,7 +47,11 @@ export const SKIP_REASONS = [
 ] as const;
 export type SkipReason = (typeof SKIP_REASONS)[number];
 
-export const EXCLUSION_REASONS = ['project-store', 'submodule'] as const;
+export const EXCLUSION_REASONS = [
+  'project-store',
+  'submodule',
+  'nested-repository',
+] as const;
 export type ExclusionReason = (typeof EXCLUSION_REASONS)[number];
 
 export const GIT_OBJECT_FORMATS = ['sha1', 'sha256'] as const;
@@ -57,6 +63,10 @@ export type GitBlobMode = (typeof GIT_BLOB_MODES)[number];
 
 export const WORKTREE_STATES = ['clean', 'differs', 'absent'] as const;
 export type WorktreeState = (typeof WORKTREE_STATES)[number];
+
+/** Which files of a working tree a working-tree root holds. */
+export const WORKTREE_SELECTIONS = ['tracked-and-unignored'] as const;
+export type WorktreeSelection = (typeof WORKTREE_SELECTIONS)[number];
 
 /** A file or a directory walked on the acquiring machine. */
 export interface FilesystemRoot {
@@ -93,7 +103,25 @@ export interface GitRoot {
   readonly locator: string;
 }
 
-export type OccurrenceRoot = FilesystemRoot | GitRoot;
+/**
+ * A Git working tree, observed: every tracked file present and every untracked
+ * file Git does not ignore, preserved as the bytes in the working tree.
+ */
+export interface GitWorktreeRoot {
+  readonly id: string;
+  readonly source: 'git-worktree';
+  readonly objectFormat: GitObjectFormat;
+  /** The commit HEAD named when the acquisition began; null before any. */
+  readonly head: string | null;
+  /** That commit's tree; null exactly when `head` is. */
+  readonly tree: string | null;
+  readonly selection: WorktreeSelection;
+  readonly platform: string;
+  /** The working tree's top-level folder, as observed. Not identity. */
+  readonly locator: string;
+}
+
+export type OccurrenceRoot = FilesystemRoot | GitRoot | GitWorktreeRoot;
 
 export interface FileEntry {
   readonly root: string;
@@ -142,7 +170,15 @@ export interface SubmoduleExclusion {
   readonly commit: string;
 }
 
-export type OccurrenceExclusion = StoreExclusion | SubmoduleExclusion;
+/** Another repository inside a working tree's untracked files, not entered. */
+export interface NestedRepositoryExclusion {
+  readonly root: string;
+  readonly path: string;
+  readonly reason: 'nested-repository';
+}
+
+export type OccurrenceExclusion =
+  StoreExclusion | SubmoduleExclusion | NestedRepositoryExclusion;
 
 export interface Occurrence {
   readonly format: typeof OCCURRENCE_FORMAT;
@@ -160,7 +196,7 @@ export interface Occurrence {
 }
 
 const isFileRoot = (root: OccurrenceRoot) =>
-  root.source !== 'git' && root.kind === 'file';
+  'kind' in root && root.kind === 'file';
 
 function isAbsoluteFor(platform: string, locator: string): boolean {
   return platform === 'win32'
@@ -222,7 +258,9 @@ function parseRoot(
     }
     const source = oneOf(
       (value as { source?: unknown } | null)?.source,
-      ['filesystem', 'git'] as const,
+      version === 2
+        ? (['filesystem', 'git'] as const)
+        : (['filesystem', 'git', 'git-worktree'] as const),
       'Occurrence root source',
     );
     if (source === 'filesystem') {
@@ -233,6 +271,53 @@ function parseRoot(
       );
       const { id, platform, locator } = rootPlace(input, index);
       return { id, source, kind: rootKind(input.kind), platform, locator };
+    }
+    if (source === 'git-worktree') {
+      const input = record(
+        value,
+        [
+          'id',
+          'source',
+          'objectFormat',
+          'head',
+          'tree',
+          'selection',
+          'platform',
+          'locator',
+        ],
+        'Git working-tree root',
+      );
+      const { id, platform, locator } = rootPlace(input, index);
+      const objectFormat = oneOf(
+        input.objectFormat,
+        GIT_OBJECT_FORMATS,
+        'Git object format',
+      );
+      if ((input.head === null) !== (input.tree === null)) {
+        throw new ValidationError(
+          'A working-tree root records HEAD and its tree, or neither',
+        );
+      }
+      return {
+        id,
+        source,
+        objectFormat,
+        head:
+          input.head === null
+            ? null
+            : objectId(input.head, objectFormat, 'Working-tree root head'),
+        tree:
+          input.tree === null
+            ? null
+            : objectId(input.tree, objectFormat, 'Working-tree root tree'),
+        selection: oneOf(
+          input.selection,
+          WORKTREE_SELECTIONS,
+          'Working-tree selection',
+        ),
+        platform,
+        locator,
+      };
     }
     const input = record(
       value,
@@ -365,7 +450,7 @@ function validate(value: unknown): Occurrence {
   );
   if (
     input.format !== OCCURRENCE_FORMAT ||
-    (input.version !== 1 && input.version !== 2)
+    (input.version !== 1 && input.version !== 2 && input.version !== 3)
   ) {
     throw new ValidationError('Unsupported occurrence format or version');
   }
@@ -495,13 +580,41 @@ function validate(value: unknown): Occurrence {
           commit: objectId(item.commit, root.objectFormat, 'Submodule commit'),
         };
       }
+      if (root.source === 'git-worktree') {
+        const reason = oneOf(
+          (value as { reason?: unknown }).reason,
+          EXCLUSION_REASONS,
+          'Exclusion reason',
+        );
+        if (reason === 'submodule') {
+          const item = record(
+            value,
+            ['root', 'path', 'reason', 'commit'],
+            'Excluded item',
+          );
+          return {
+            root: root.id,
+            path: relativePath(item.path, root),
+            reason,
+            commit: objectId(
+              item.commit,
+              root.objectFormat,
+              'Submodule commit',
+            ),
+          };
+        }
+        const item = record(value, ['root', 'path', 'reason'], 'Excluded item');
+        return { root: root.id, path: relativePath(item.path, root), reason };
+      }
       const item = record(value, ['root', 'path', 'reason'], 'Excluded item');
       if (root.kind !== 'directory') {
         throw new ValidationError('Only a directory root can have exclusions');
       }
       const reason = oneOf(item.reason, EXCLUSION_REASONS, 'Exclusion reason');
       if (reason !== 'project-store') {
-        throw new ValidationError('Only a Git root can exclude a submodule');
+        throw new ValidationError(
+          'A folder root excludes only the project store',
+        );
       }
       return { root: root.id, path: relativePath(item.path, root), reason };
     },
@@ -580,31 +693,42 @@ function serialize(occurrence: Occurrence): Uint8Array {
     finishedAt: occurrence.finishedAt,
     status: occurrence.status,
     roots: occurrence.roots.map((root) =>
-      root.source === 'git'
+      root.source === 'git-worktree'
         ? {
             id: root.id,
             source: root.source,
             objectFormat: root.objectFormat,
-            commit: root.commit,
+            head: root.head,
             tree: root.tree,
-            worktree: root.worktree,
+            selection: root.selection,
             platform: root.platform,
             locator: root.locator,
           }
-        : root.source === undefined
+        : root.source === 'git'
           ? {
               id: root.id,
-              kind: root.kind,
+              source: root.source,
+              objectFormat: root.objectFormat,
+              commit: root.commit,
+              tree: root.tree,
+              worktree: root.worktree,
               platform: root.platform,
               locator: root.locator,
             }
-          : {
-              id: root.id,
-              source: root.source,
-              kind: root.kind,
-              platform: root.platform,
-              locator: root.locator,
-            },
+          : root.source === undefined
+            ? {
+                id: root.id,
+                kind: root.kind,
+                platform: root.platform,
+                locator: root.locator,
+              }
+            : {
+                id: root.id,
+                source: root.source,
+                kind: root.kind,
+                platform: root.platform,
+                locator: root.locator,
+              },
     ),
     entries: occurrence.entries.map((entry) =>
       'blob' in entry
@@ -672,7 +796,7 @@ export function occurrenceIdOf(
 export function parseOccurrenceId(value: unknown): OccurrenceId {
   if (
     typeof value !== 'string' ||
-    !/^occurrence:v[12]:[a-f0-9]{64}$/.test(value)
+    !/^occurrence:v[123]:[a-f0-9]{64}$/.test(value)
   ) {
     throw new ValidationError('Invalid occurrence ID');
   }

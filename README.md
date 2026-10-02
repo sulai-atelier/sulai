@@ -28,6 +28,8 @@ What works:
 - several files or directories imported as one acquisition, without following links
 - a Git repository's committed files, read from the commit at HEAD rather than the
   working folder, with the commit recorded
+- a Git repository's working tree as it is, committed or not: the files Git tracks
+  and the untracked ones it does not ignore, with HEAD recorded as provenance
 - versioned state pages, each citation resolved to exact preserved bytes or
   recorded as unresolved
 - `status`, `why` and `diff` over those pages
@@ -89,10 +91,12 @@ every command.
 
 To capture a Git repository's committed files rather than a folder, name it with
 `--git`. This reads the commit the clone has checked out, not its working folder,
-and refuses while the working tree differs from that commit:
+and refuses while the working tree differs from that commit. To capture the
+working tree as it is instead, name it with `--worktree`:
 
 ```sh
 npm run cli -- import .tmp/example --git .
+npm run cli -- import .tmp/example --worktree .
 ```
 
 ### Keeping a project's state as its agent
@@ -106,11 +110,12 @@ npm run cli -- orient ../my-project
 npm run cli -- record ../my-project - < page.md
 ```
 
-`orient` observes the project, the commit at HEAD for a Git repository, and
+`orient` observes the project as it is, the working tree for a Git repository, and
 prints where it stands: each current page, and every citation whose evidence has
 changed since the page was recorded, with the text it cited and the text there
 now. It does not decide what the change means or repair anything. `record` saves
-the next page against the project as it is then. Both print what to do next.
+the next page against the project as it is then, so nothing needs committing
+first. Both print what to do next.
 
 ## How it works
 
@@ -151,7 +156,8 @@ The [project principles](docs/principles.md) define these in full.
   its file changed above the cited lines. Recording refuses that for citations kept
   from the previous revision, but correcting them is still manual.
 - A citation that resolves shows what a line points at, not that the line is right.
-- Git capture reads the commit at HEAD only, and needs git 2.45 or later.
+- Git capture reads the commit at HEAD or the working tree, and needs git 2.45 or
+  later.
 - People and agents write state pages; Sulai records and checks them.
 
 ## Documentation

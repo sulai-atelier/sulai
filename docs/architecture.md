@@ -10,7 +10,7 @@ Sulai keeps a project's history as three kinds of immutable record. Each is
 identified by the SHA-256 of its exact bytes, and none is ever rewritten.
 
 ```text
-files, folders or commits you name
+files, folders, commits or working trees you name
       │ import
       ▼
   Artifact         exact bytes, stored once
@@ -28,7 +28,9 @@ files, folders or commits you name
 - **Occurrence.** One acquisition. It lists the roots that were named, numbered
   `r1`, `r2` and so on, every input found under them with the artifact it became,
   and every input that could not be captured, with a reason. A root is a file, a
-  folder, or one commit read from a Git repository, recorded with its commit ID.
+  folder, one commit read from a Git repository, recorded with its commit ID, or
+  a Git working tree, its files as they are, recorded with the HEAD it was
+  observed at.
   The same bytes imported twice are one artifact and two occurrences.
 - **State revision.** One view of where the project stands. The page is Markdown,
   written by a person or an agent. Each citation on it, such as
@@ -50,7 +52,7 @@ These separations are deliberate. Most mistakes would come from blurring one.
 | citation resolution and claim support | Sulai proves that a citation points at exact bytes, never that those bytes support the line                                                |
 | project state and truth               | a state page is a recorded view, not a verdict                                                                                             |
 | acquisition and discovery             | only the paths named are read: links are never followed, and content is never searched for other paths                                     |
-| a commit and its working folder       | a Git root reads the commit's objects, never the folder, so uncommitted work is never mistaken for the commit                              |
+| a commit and its working tree         | a Git root reads the commit's objects, never the folder; a working-tree root reads the folder's bytes; neither is mistaken for the other   |
 
 ## Storage
 
@@ -60,7 +62,7 @@ A project keeps its records under `.sulai/`:
 .sulai/
   .gitignore      *, so Git never tracks the store; not part of the format
   README.md       read this through the sulai command; not part of the format
-  project.json    storage format marker, version 5
+  project.json    storage format marker, version 6
   artifacts/      <sha256>.raw
   occurrences/    <sha256>.json
   states/         <sha256>.json
@@ -100,14 +102,14 @@ Inside `packages/cli/src`:
 | `project.ts`      | the `.sulai` layout, the format marker, creating and opening a project  |
 | `artifacts.ts`    | storing one file; loading one artifact whole                            |
 | `acquire.ts`      | checking roots, walking or reading them, and recording an occurrence    |
-| `git.ts`          | running Git: one commit's tree and blobs, and the working-tree check    |
+| `git.ts`          | running Git: a commit's tree and blobs, and what a working tree holds   |
 | `occurrences.ts`  | reading stored occurrences and checking them against their artifacts    |
 | `references.ts`   | resolving a page's citations to byte ranges                             |
 | `state.ts`        | recording revisions; `status`, `why` and `diff`                         |
 | `flow.ts`         | the agent's commands: observe, check the state, then serve or record it |
 | `inspect.ts`      | integrity checks                                                        |
 | `interpret.ts`    | reading an artifact through a format                                    |
-| `upgrade.ts`      | upgrading a storage format 4 project                                    |
+| `upgrade.ts`      | upgrading a storage format 4 or 5 project                               |
 | `experimental.ts` | the experimental Claude Code command                                    |
 | `main.ts`         | argument parsing and output                                             |
 
