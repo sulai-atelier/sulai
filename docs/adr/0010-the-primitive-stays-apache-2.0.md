@@ -25,16 +25,19 @@ The primitive is:
 
 - **The formats:** the records and the local storage defined in [docs/format.md](../format.md),
   including future versions of them published in this repository.
-- **The specifications:** `docs/format.md`, `docs/architecture.md` and these decision records.
-- **The reference implementation:** `packages/core` and `packages/cli`, including the `sulai`
-  command.
+- **The specifications** needed to implement Sulai independently: `docs/format.md`, with
+  `docs/architecture.md` and these decision records.
+- **The reference implementation:** the deterministic local engine, library and command line in
+  `packages/core` and `packages/cli`.
 
 **Outside this commitment:**
 
+- **Anything built above the primitive:** hosted services, managed sync and collaboration,
+  organization and enterprise capabilities, future applications, and optional commercial layers.
+  Their licensing is not decided, and this record does not decide it. Nothing in the primitive
+  depends on them.
 - **`packages/experimental-claude-code`.** It is Apache-2.0 while it ships here, but it is
   experimental and may be removed.
-- **Hosted services and commercial layers built above the primitive.** These may use other
-  licenses. They are separate software, and nothing in the primitive depends on them.
 - **The Sulai name and project identity.** These are covered by
   [GOVERNANCE.md](../../GOVERNANCE.md), not by the license.
 
@@ -43,8 +46,8 @@ The primitive is:
 A tool can depend on Sulai's formats and reference implementation and know the terms will not tighten
 under it. A fork of the primitive is never needed just to keep the license it already had.
 
-The commitment narrows the project's options. Any business must be built above the primitive, as
-hosted or commercial layers, never by restricting the primitive itself.
+The commitment narrows the project's options: commercial work happens above the primitive, never by
+restricting the primitive itself.
 
 ## Alternatives considered
 
