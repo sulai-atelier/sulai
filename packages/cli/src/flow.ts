@@ -263,7 +263,7 @@ export async function orient(directory: string) {
     draft: { path: draftPath(project), ...draft },
     next:
       (moved > 0
-        ? `${moved} citation(s) no longer match the current project; each is listed under "changed" with the text it cited and the text there now. What the change means is yours to judge. A next page that keeps one of these citations is recorded with --allow-changed-citations. `
+        ? `${moved} citation(s) no longer match the current project; each is listed under "changed" with the text it cited and the text there now. Sulai does not decide what a change means. If the project does not settle it, keep the disagreement or uncertainty explicit in the next page rather than requiring a ruling. A page that keeps a moved citation is recorded with --allow-changed-citations: the flag acknowledges that the evidence changed; it does not approve either version or resolve the conflict. `
         : unresolved > 0
           ? 'No resolved citation has moved. '
           : 'Every citation still matches the current project. ') +
