@@ -16,11 +16,14 @@ import { run } from './run.mjs';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const windows = process.platform === 'win32';
 const base = mkdtempSync(join(tmpdir(), 'sulai-smoke-'));
-// Git and npm see nothing of the machine's own configuration.
+// Git and npm see nothing of the machine's own configuration, nor of this
+// repository's: `npm run` passes its settings down as npm_* variables.
 const config = join(base, 'gitconfig');
 writeFileSync(config, '');
 const env = {
-  ...process.env,
+  ...Object.fromEntries(
+    Object.entries(process.env).filter(([key]) => !/^npm_/i.test(key)),
+  ),
   GIT_CONFIG_GLOBAL: config,
   GIT_CONFIG_NOSYSTEM: '1',
   GIT_AUTHOR_NAME: 'Sulai Smoke',
