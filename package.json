@@ -29,7 +29,9 @@
     "lint": "eslint . --max-warnings 0",
     "typecheck": "npm run build && tsc -p tsconfig.test.json",
     "test": "npm run build && node --test \"packages/*/test/*.test.ts\"",
-    "cli": "node packages/cli/dist/main.js"
+    "cli": "node packages/cli/dist/main.js",
+    "pack": "npm run build && node scripts/pack.mjs",
+    "smoke": "npm run build && node scripts/smoke.mjs"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
