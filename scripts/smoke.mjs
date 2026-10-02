@@ -16,22 +16,30 @@ import { run } from './run.mjs';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const windows = process.platform === 'win32';
 const base = mkdtempSync(join(tmpdir(), 'sulai-smoke-'));
-// Git and npm see nothing of the machine's own configuration, nor of this
-// repository's: `npm run` passes its settings down as npm_* variables.
-const config = join(base, 'gitconfig');
-writeFileSync(config, '');
+// Git and npm see nothing of the machine's own configuration, user or global,
+// nor of this repository's: `npm run` passes its settings down as npm_*
+// variables. The one setting given is engine-strict, so the install fails
+// unless the package declares the running Node supported.
+const gitconfig = join(base, 'gitconfig');
+const userconfig = join(base, 'npmrc');
+const globalconfig = join(base, 'npmrc-global');
+for (const file of [gitconfig, userconfig, globalconfig]) {
+  writeFileSync(file, '');
+}
 const env = {
   ...Object.fromEntries(
     Object.entries(process.env).filter(([key]) => !/^npm_/i.test(key)),
   ),
-  GIT_CONFIG_GLOBAL: config,
+  GIT_CONFIG_GLOBAL: gitconfig,
   GIT_CONFIG_NOSYSTEM: '1',
   GIT_AUTHOR_NAME: 'Sulai Smoke',
   GIT_AUTHOR_EMAIL: 'smoke@example.invalid',
   GIT_COMMITTER_NAME: 'Sulai Smoke',
   GIT_COMMITTER_EMAIL: 'smoke@example.invalid',
-  npm_config_userconfig: join(base, 'npmrc'),
+  npm_config_userconfig: userconfig,
+  npm_config_globalconfig: globalconfig,
   npm_config_cache: join(base, 'npm-cache'),
+  npm_config_engine_strict: 'true',
 };
 const exec = (program, args, cwd = base) =>
   run(program, args, { cwd, env, stdio: ['ignore', 'pipe', 'pipe'] });
