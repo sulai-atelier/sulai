@@ -17,15 +17,17 @@ a bare file-not-found error. None of this is about the evidence or the state; it
 
 ### The draft
 
-- **`orient` keeps the next page in `.sulai/draft.md`,** inside the store, so Git ignores it and no
-  acquisition reads it. With one head, it holds that head's page; before any revision, it is empty.
+- **`orient` keeps the next page in `.sulai/draft.md`,** inside the store, which `init` normally
+  asks Git to ignore. `orient` and `record` never acquire the draft as project evidence. With one
+  head, it holds that head's page; before any revision, it is empty.
   The agent edits it there with its ordinary file tools, changing only the lines that changed.
 - **`sulai record <directory>` with no page records the draft.** A page given as a file or as `-`
   is recorded as before.
 - **Beside the draft, `.sulai/draft.json` says which state it began from** and what Sulai last wrote
   into it, so Sulai can tell an edited draft from one it wrote itself.
-- **Neither file is part of the format.** They are a workspace for the agent, not project history:
-  never acquired, never a record, and not checked by `inspect`.
+- **Neither file is part of the format.** They remain mutable workspace for the agent, outside
+  Sulai's persistent format: never project evidence for `orient` or `record`, never a record, and
+  not checked by `inspect`.
 
 ### When the draft may change
 

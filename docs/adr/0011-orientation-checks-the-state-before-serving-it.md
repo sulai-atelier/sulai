@@ -33,8 +33,8 @@ the agent has already relied on the old one. The check has to happen before the 
   applies unchanged. A locator written without its backticks is refused: a page records only code
   spans as citations, so it would be recorded as plain text, citing nothing.
 - **The store stays out of the project's history, and says how to read it.** `init` writes
-  `.sulai/.gitignore` holding `*`, so an agent that commits everything does not commit the store,
-  and `.sulai/README.md`, which tells an agent that finds the store to read it through
+  `.sulai/.gitignore` holding `*`, so ordinary Git operations ignore the store and an agent that
+  commits everything does not commit it, unless it is already tracked, and `.sulai/README.md`, which tells an agent that finds the store to read it through
   `sulai orient`. An agent that reads the store's files directly gets the state unchecked and never
   learns there is a command. Neither file is part of the format.
 - **`init` and `orient` name the next step,** so an agent needs no instructions beyond the
