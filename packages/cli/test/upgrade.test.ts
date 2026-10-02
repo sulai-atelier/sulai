@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -345,3 +345,42 @@ test('a version 5 marker over a record only version 6 writes refuses the upgrade
   );
   assert.equal(await readFile(join(store, 'project.json'), 'utf8'), VERSION_5);
 });
+
+test(
+  'the marker is renamed into place once a lock on it is released',
+  {
+    skip:
+      process.platform !== 'win32' &&
+      'only Windows refuses to replace a file another process holds open',
+  },
+  async (t) => {
+    const { directory, store } = await version5Store(t);
+    const marker = join(store, 'project.json');
+    // Another process holds the marker open with no sharing, as a scanner or
+    // indexer can, and lets go after a while.
+    const holder = spawn(
+      'powershell.exe',
+      [
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        `$h = [IO.File]::Open('${marker}', 'Open', 'Read', 'None'); [Console]::Out.WriteLine('held'); [Console]::Out.Flush(); Start-Sleep -Milliseconds 1500; $h.Close()`,
+      ],
+      { stdio: ['ignore', 'pipe', 'inherit'] },
+    );
+    const exited = new Promise((done) => holder.on('exit', done));
+    t.after(() => exited);
+    await new Promise<void>((held, failed) => {
+      holder.stdout.on('data', (chunk: Buffer) => {
+        if (chunk.toString().includes('held')) held();
+      });
+      holder.on('exit', () => failed(new Error('the lock was never taken')));
+    });
+    const started = Date.now();
+    const result = await upgradeProject(directory);
+    assert.equal(result.upgraded, true);
+    assert.equal(await readFile(marker, 'utf8'), VERSION_6);
+    // It waited for the lock rather than failing at once.
+    assert.ok(Date.now() - started >= 500, 'the rename should have waited');
+  },
+);

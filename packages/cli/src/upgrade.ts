@@ -4,7 +4,7 @@
  * version 6 record, so only the marker changes.
  */
 import { randomUUID } from 'node:crypto';
-import { mkdir, open, rename } from 'node:fs/promises';
+import { mkdir, open } from 'node:fs/promises';
 import { join } from 'node:path';
 import { ValidationError } from '@sulai/core';
 import { verifyProject } from './inspect.js';
@@ -20,6 +20,7 @@ import {
   assertDirectory,
   cleanupAfterFailure,
   readBounded,
+  renameReplacing,
 } from './store.js';
 
 /**
@@ -77,7 +78,8 @@ export async function upgradeProject(directory: string) {
     } finally {
       await handle.close();
     }
-    await rename(staged, project.marker);
+    // A scanner can hold either file for a while on Windows; wait it out.
+    await renameReplacing(staged, project.marker);
   } catch (error) {
     throw await cleanupAfterFailure(error, staged);
   }
