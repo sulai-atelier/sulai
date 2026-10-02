@@ -37,7 +37,9 @@ the agent has already relied on the old one. The check has to happen before the 
   `--allow-uncommitted` is given. The working tree is never captured.
 - **The store stays out of the project's history.** `init` writes `.sulai/.gitignore` holding `*`,
   so an agent that commits everything does not commit the store. It is not part of the format.
-- **Each output names the next step,** so an agent needs no instructions beyond the commands.
+- **`init` and `orient` name the next step,** so an agent needs no instructions beyond the
+  commands. `status`, which prints the state as recorded without observing anything, says that it
+  is unchecked and that `orient` checks it.
 
 ## Consequences
 

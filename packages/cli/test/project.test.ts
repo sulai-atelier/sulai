@@ -650,7 +650,11 @@ test('CLI initializes, imports, inspects, and interprets in separate processes',
     assert.equal(result.stderr, '');
     return JSON.parse(result.stdout) as unknown;
   }
-  assert.deepEqual(run(['init', directory]), { directory, created: true });
+  assert.deepEqual(run(['init', directory]), {
+    directory,
+    created: true,
+    next: `See where the project stands with: sulai orient ${directory}`,
+  });
   const artifact = importConversation(await readFile(fixture)).artifact;
   const summary = { id: artifact.id, byteLength: artifact.byteLength };
   const imported = run(['import', directory, fixture]) as {
