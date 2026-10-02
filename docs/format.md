@@ -151,7 +151,8 @@ does, and stops if anything fails or if the store holds a record its marker's
 version could not have written: version 4 holds only version 1 records, and
 version 5 only version 1 and 2 records. Then it stages the version 6 marker in
 `tmp`, syncs it, and renames it over `project.json`, so an interruption leaves
-one whole marker or the other. `project.json` is the only
+one whole marker or the other. While Windows reports either file locked, as a
+scanner or indexer can for many seconds, the rename is retried for up to a minute. `project.json` is the only
 stored file that is ever replaced, and only by this command.
 
 `.sulai/tmp` is ephemeral. It is recreated on demand, so its absence does not

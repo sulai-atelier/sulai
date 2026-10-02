@@ -42,6 +42,10 @@ a bare file-not-found error. None of this is about the evidence or the state; it
   treated as begun from an unknown state: it is kept, and `record` needs `--parent`.
 - **After a successful `record`,** the draft holds the page just recorded and begins from the new
   revision, ready for the next change. Recording a page from a file leaves an edited draft alone.
+- **The draft never decides whether a revision was recorded.** If it cannot be updated after a
+  revision is recorded, `record` still succeeds and says the draft was not updated; the draft then
+  begins from the old state, so recording it again is refused until it is brought up to date. If
+  `orient` cannot keep it, it still checks and serves the state and reports the draft unavailable.
 - **`record` refuses an empty draft, and a draft unchanged from the page it began from,** since
   either would record nothing the agent wrote.
 

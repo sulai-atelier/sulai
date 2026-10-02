@@ -280,11 +280,16 @@ export async function orient(directory: string) {
 
 type DraftReport = {
   /** `ready`: Sulai wrote it; `kept`: unrecorded edits begun from the head;
-   * `behind`: unrecorded edits begun elsewhere; `none`: no draft. */
-  readonly state: 'ready' | 'kept' | 'behind' | 'none';
+   * `behind`: unrecorded edits begun elsewhere; `none`: no draft;
+   * `unavailable`: it could not be read or written. */
+  readonly state: 'ready' | 'kept' | 'behind' | 'none' | 'unavailable';
   /** The state it began from, null before any, or undefined when unknown. */
   readonly began?: StateId | null | undefined;
+  readonly reason?: string;
 };
+
+const reasonOf = (error: unknown) =>
+  error instanceof Error ? error.message : String(error);
 
 /**
  * Keeps the draft for one head, or for none: it is written only when it holds
@@ -296,15 +301,21 @@ async function keepDraft(
   head: StateId | null,
   page: Buffer,
 ): Promise<DraftReport> {
-  const draft = await readDraft(project);
-  if (draft === null || !draft.edited) {
-    await writeDraft(project, page, head);
-    return { state: 'ready', began: head };
+  // The draft is a convenience. A failure to keep it never stops the state
+  // from being checked and served.
+  try {
+    const draft = await readDraft(project);
+    if (draft === null || !draft.edited) {
+      await writeDraft(project, page, head);
+      return { state: 'ready', began: head };
+    }
+    return {
+      state: draft.base === head ? 'kept' : 'behind',
+      began: draft.base,
+    };
+  } catch (error) {
+    return { state: 'unavailable', reason: reasonOf(error) };
   }
-  return {
-    state: draft.base === head ? 'kept' : 'behind',
-    began: draft.base,
-  };
 }
 
 /** With several heads no draft is chosen; one already there is left alone. */
@@ -312,7 +323,12 @@ async function draftAmong(
   project: Project,
   heads: readonly StateId[],
 ): Promise<DraftReport> {
-  const draft = await readDraft(project);
+  let draft;
+  try {
+    draft = await readDraft(project);
+  } catch (error) {
+    return { state: 'unavailable', reason: reasonOf(error) };
+  }
   if (draft === null) return { state: 'none' };
   return {
     state:
@@ -326,6 +342,9 @@ async function draftAmong(
 }
 
 function draftNote(draft: DraftReport, shown: string, command: string) {
+  if (draft.state === 'unavailable') {
+    return `The draft in ${shown} could not be kept (${draft.reason}). Record the next page from a file or standard input instead: ${command} <page|->`;
+  }
   if (draft.state === 'kept') {
     return `Your unrecorded edits in ${shown} were kept. Record them with: ${command}`;
   }
@@ -358,9 +377,17 @@ export async function recordNext(
 ) {
   const project = await openProject(directory);
   const revisions = await readAllStates(project);
-  const draft = await readDraft(project);
   const fromDraft = pageSource === undefined;
-  if (fromDraft && draft === null) {
+  // Recording a page given directly does not depend on the draft, so a draft
+  // that cannot be read only means it is left alone afterwards.
+  let draft: Awaited<ReturnType<typeof readDraft>> | 'unreadable';
+  try {
+    draft = await readDraft(project);
+  } catch (error) {
+    if (fromDraft) throw error;
+    draft = 'unreadable';
+  }
+  if (fromDraft && (draft === null || draft === 'unreadable')) {
     throw new ValidationError(
       `There is no draft to record. Run sulai orient ${named(directory)}, which writes one, or give a page.`,
     );
@@ -380,7 +407,12 @@ export async function recordNext(
     }
     parent = heads[0];
     // An old draft must not silently continue a newer head.
-    if (fromDraft && draft !== null && draft.base !== (parent ?? null)) {
+    if (
+      fromDraft &&
+      draft !== null &&
+      draft !== 'unreadable' &&
+      draft.base !== (parent ?? null)
+    ) {
       throw new ValidationError(
         draft.base === undefined
           ? 'Where the draft began is not known. Name the state it continues with --parent.'
@@ -389,7 +421,7 @@ export async function recordNext(
     }
   }
   const bytes = fromDraft
-    ? (draft?.bytes as Buffer)
+    ? (draft as { bytes: Buffer }).bytes
     : typeof pageSource === 'string'
       ? await readBounded(resolve(pageSource), MAX_STATE_PAGE_BYTES)
       : Buffer.from(pageSource as Uint8Array);
@@ -398,7 +430,11 @@ export async function recordNext(
       `The draft is empty. Write the page in ${join(directory, '.sulai', 'draft.md')} first.`,
     );
   }
-  if (fromDraft && draft?.edited === false && parent !== undefined) {
+  if (
+    fromDraft &&
+    (draft as { edited: boolean }).edited === false &&
+    parent !== undefined
+  ) {
     throw new ValidationError(
       'The draft is unchanged from the page it began from, so there is nothing new to record. Edit it first.',
     );
@@ -432,13 +468,33 @@ export async function recordNext(
     { allowChangedCitations: options.allowChangedCitations === true },
   );
   // The draft moves on to the page just recorded, unless it holds edits that
-  // this record did not take.
-  if (fromDraft || draft === null || !draft.edited) {
-    await writeDraft(project, bytes, recorded.id);
+  // this record did not take. The revision is recorded by now, so a failure
+  // here is reported, never thrown: it must not look as if recording failed.
+  let refreshed = false;
+  let reason: string | undefined;
+  if (
+    draft !== 'unreadable' &&
+    (fromDraft || draft === null || !draft.edited)
+  ) {
+    try {
+      await writeDraft(project, bytes, recorded.id);
+      refreshed = true;
+    } catch (error) {
+      reason = reasonOf(error);
+    }
   }
   return {
     ...recorded,
     observed: describe(observed),
-    draft: draftPath(project),
+    draft: {
+      path: draftPath(project),
+      refreshed,
+      ...(reason === undefined
+        ? {}
+        : {
+            reason,
+            note: 'The revision was recorded, but the draft could not be updated. It still holds what it held, so recording it again is refused until it is brought up to date.',
+          }),
+    },
   };
 }

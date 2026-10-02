@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import {
+  chmod,
   mkdir,
   mkdtemp,
   readFile,
@@ -542,3 +543,38 @@ test('orient and record before init say to run init', async (t) => {
   );
   assert.deepEqual(await readdir(base), []);
 });
+
+test(
+  'a draft that cannot be updated never makes a recorded revision look failed',
+  { skip },
+  async (t) => {
+    const repo = await project(t);
+    const first = await recordNext(repo, Buffer.from(FIRST));
+    await orient(repo);
+    const draft = join(repo, '.sulai', 'draft.md');
+    await chmod(draft, 0o444);
+    try {
+      // A page given directly is recorded; the draft cannot follow, and says so.
+      const next = FIRST.replace('20 links', '20 links per page');
+      const second = await recordNext(repo, Buffer.from(next));
+      assert.equal(second.parent, first.id);
+      assert.equal(second.draft.refreshed, false);
+      assert.ok('reason' in second.draft && second.draft.reason.length > 0);
+      assert.equal((await states(repo)).length, 2);
+      assert.equal(await draftOf(repo), FIRST);
+      // orient still checks and serves the state, and says the draft is
+      // unavailable.
+      const result = await orient(repo);
+      assert.equal(result.heads[0]?.revision, second.id);
+      assert.equal(result.draft.state, 'unavailable');
+      assert.match(result.next, /could not be kept/);
+      // The stale draft is never recorded silently over the newer head.
+      await assert.rejects(
+        recordNext(repo),
+        /began from state:v3:\w+, but the head is now/,
+      );
+    } finally {
+      await chmod(draft, 0o644);
+    }
+  },
+);
