@@ -60,7 +60,7 @@ A project keeps its records under `.sulai/`:
 
 ```text
 .sulai/
-  .gitignore      *, so Git never tracks the store; not part of the format
+  .gitignore      *, so ordinary Git operations ignore the store; not part of the format
   README.md       read this through the sulai command; not part of the format
   draft.md        the next page, kept for the agent to edit; not part of the format
   draft.json      which state the draft began from; not part of the format
@@ -70,6 +70,12 @@ A project keeps its records under `.sulai/`:
   states/         <sha256>.json
   tmp/            staging, recreated when needed
 ```
+
+`init` normally writes `.sulai/.gitignore` with `*`, so ordinary Git operations
+ignore the store. The agent-facing folder and working-tree acquisitions exclude
+the project store even if it is tracked. A commit acquisition remains faithful
+to the commit, and therefore preserves `.sulai` files if someone explicitly
+committed them.
 
 Preserving and verifying an artifact streams it in bounded chunks, so an
 artifact's size is limited only by disk space. Occurrence records and state

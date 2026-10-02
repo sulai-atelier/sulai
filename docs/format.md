@@ -110,14 +110,19 @@ publication: publication does not validate at all.
     tmp/
 ```
 
-`.gitignore` holds `*`, so a project that is also a Git repository never
-commits its store. `README.md` tells whoever finds the store to read it through
-the `sulai` command. `sulai init` writes each when it is absent. `draft.md` is
-the next page in progress, which `sulai orient` keeps and `sulai record` records
-when no page is given, and `draft.json` says which state it began from; see
+`.gitignore` holds `*`, so ordinary Git operations ignore the store. `README.md`
+tells whoever finds the store to read it through the `sulai` command. `sulai init`
+writes each when it is absent. A store made before `init` wrote them, such as an
+upgraded one, lacks them until `init` runs again. `draft.md` is the next page in
+progress, which `sulai orient` keeps and `sulai record` records when no page is
+given, and `draft.json` says which state it began from; see
 [ADR 0013](adr/0013-the-agent-edits-a-draft-sulai-keeps.md). None of these is part
-of the format: nothing reads them as records, `inspect` does not check them, and
-no acquisition reads the store.
+of the format: nothing reads them as records, and `inspect` does not check them.
+
+A folder or working-tree acquisition excludes the project store even if it is
+tracked, so `orient` and `record` never acquire it as evidence. A commit
+acquisition stays faithful to the commit, so it preserves `.sulai` files if
+someone committed them.
 
 `project.json` is the exact UTF-8 byte sequence below followed by one LF. It is a
 format marker written and validated by the CLI, not user-editable configuration:
