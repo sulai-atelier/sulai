@@ -195,6 +195,31 @@ test(
 );
 
 test(
+  'the store is recognized when the project is named through a link',
+  { skip },
+  async (t) => {
+    const base = await mkdtemp(join(tmpdir(), 'sulai-worktree-'));
+    t.after(() => rm(base, { recursive: true, force: true }));
+    await mkdir(join(base, 'real'));
+    // Git names a working tree by its real path; the caller may not.
+    await symlink(join(base, 'real'), join(base, 'alias'), 'junction');
+    await repository(join(base, 'real'), { 'a.txt': 'a\n' });
+    const repo = join(base, 'alias', 'repo');
+    await initializeProject(repo);
+    await rm(join(repo, '.sulai', '.gitignore'));
+    const result = await importPaths(repo, [{ worktree: repo }]);
+    const record = await inspectOccurrence(repo, result.occurrenceId);
+    assert.deepEqual(
+      record.entries.map((entry) => entry.path),
+      ['a.txt'],
+    );
+    assert.deepEqual(record.excluded, [
+      { root: 'r1', path: '.sulai', reason: 'project-store' },
+    ]);
+  },
+);
+
+test(
   'a submodule and a nested repository are excluded and not entered',
   { skip },
   async (t) => {
