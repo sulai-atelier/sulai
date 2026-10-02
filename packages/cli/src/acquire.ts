@@ -552,8 +552,10 @@ export async function importPaths(
   async function observe(root: WorktreeRoot): Promise<void> {
     const { folder } = root.worktree;
     // The store is never read as evidence, even when Git would select it.
-    const store = isWithin(folder, project.store)
-      ? relative(folder, project.store).split(sep).join('/')
+    // Git names the working tree by its real path, so the store's is used too.
+    const real = await realpath(project.store);
+    const store = isWithin(folder, real)
+      ? relative(folder, real).split(sep).join('/')
       : null;
     let storeSelected = false;
     const listing = await listWorktree(root.worktree);
