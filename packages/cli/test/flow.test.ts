@@ -151,7 +151,13 @@ test(
       truncated: false,
     });
     assert.match(result.next, /1 citation\(s\) no longer match/);
-    assert.match(result.next, /yours to judge/);
+    // Changed evidence asks for no ruling, and the flag approves nothing.
+    assert.match(result.next, /Sulai does not decide what a change means/);
+    assert.match(result.next, /rather than requiring a ruling/);
+    assert.match(
+      result.next,
+      /acknowledges that the evidence changed; it does not approve either version or resolve the conflict/,
+    );
     // Orienting recorded no revision and changed none.
     assert.deepEqual(await states(repo), recorded);
 
@@ -236,10 +242,16 @@ test(
     git(repo, 'add', '-A');
     assert.equal(git(repo, 'diff', '--cached', '--name-only'), '');
     assert.equal(git(repo, 'status', '--porcelain'), '');
-    // An agent that finds the store is told to read it through Sulai.
+    // An agent that finds the store is told to orient before using the draft,
+    // and not to take the records as the current state.
+    const readme = await readFile(join(repo, '.sulai', 'README.md'), 'utf8');
     assert.match(
-      await readFile(join(repo, '.sulai', 'README.md'), 'utf8'),
-      /read the project's state through the `sulai` command[\s\S]*sulai orient \./,
+      readme,
+      /Run `sulai orient \.`\nbefore reading or editing draft\.md/,
+    );
+    assert.match(
+      readme,
+      /Do\nnot use the files under artifacts\/, states\/ or occurrences\/ as the project's\ncurrent state/,
     );
 
     const base = await mkdtemp(join(tmpdir(), 'sulai-flow-'));
@@ -390,7 +402,10 @@ test(
 
     const refused = run(['record', repo, '-'], FIRST);
     assert.equal(refused.status, 1);
-    assert.match(refused.stderr, /--allow-changed-citations/);
+    assert.match(
+      refused.stderr,
+      /keep them and record with --allow-changed-citations, which acknowledges that their evidence changed; it does not approve or resolve the change/,
+    );
     const allowed = run(
       ['record', repo, '-', '--allow-changed-citations'],
       FIRST,

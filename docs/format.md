@@ -111,7 +111,8 @@ publication: publication does not validate at all.
 ```
 
 `.gitignore` holds `*`, so ordinary Git operations ignore the store. `README.md`
-tells whoever finds the store to read it through the `sulai` command. `sulai init`
+tells whoever finds the store to run `sulai orient` before reading or editing
+`draft.md`, and not to take the records as the project's current state. `sulai init`
 writes each when it is absent. A store made before `init` wrote them, such as an
 upgraded one, lacks them until `init` runs again. `draft.md` is the next page in
 progress, which `sulai orient` keeps and `sulai record` records when no page is
@@ -485,7 +486,8 @@ citation the page keeps from the parent, and that resolved there, must still cit
 the same bytes. If one now cites different text or no longer resolves, recording is
 refused and names each such citation and its page lines, unless
 `--allow-changed-citations` is given; the result then lists them as
-`changedCitations`. See
+`changedCitations`. The flag acknowledges that the evidence changed; it does not
+approve either version or resolve the conflict. See
 [ADR 0008](adr/0008-a-kept-citation-keeps-its-evidence.md).
 
 **Reading.** `sulai status <project>` prints every head with its page and the

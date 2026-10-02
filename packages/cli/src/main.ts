@@ -40,7 +40,10 @@ its evidence in backticks, against the roots orient lists:
 
 In a Git project Sulai reads the working tree as it is, so nothing needs
 committing first. Sulai reports what moved; it never decides what a change means
-or repairs the state.
+or repairs the state. When evidence behind a kept citation moved and the project
+does not settle what that means, say so in the page and record it with
+--allow-changed-citations. The flag acknowledges changed evidence; it does not
+approve or resolve the change.
 
 Every command:
   sulai init <directory>
@@ -94,7 +97,8 @@ each reference, written \`rN/path#La-Lb\` against one occurrence, is resolved to
 exact bytes or recorded as unresolved. Sulai checks the pointer, never the claim.
 A citation kept from the parent revision must still cite the same text; if its
 file changed so that it no longer does, recording is refused unless
---allow-changed-citations is given.
+--allow-changed-citations is given, which acknowledges the change; it does not
+approve or resolve it.
 
 Interpretation is a separate step, so material that no current reader
 understands is still stored faithfully and can be re-derived later. The only

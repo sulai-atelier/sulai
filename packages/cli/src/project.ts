@@ -49,16 +49,17 @@ const GIT_IGNORE = Buffer.from('*\n');
 /** Tells whoever finds the store, most likely an agent, how to read it. */
 const README = Buffer.from(`# Sulai
 
-This folder is Sulai's store for the project around it. Its files are records,
-not notes: read the project's state through the \`sulai\` command, which first
-checks it against the project as it is now. From the project folder:
+This folder is Sulai's store for the project around it. Run \`sulai orient .\`
+before reading or editing draft.md: orient first checks the recorded state
+against the project as it is now, then keeps the checked page in draft.md. Do
+not use the files under artifacts/, states/ or occurrences/ as the project's
+current state. From the project folder:
 
     sulai orient .            where the project stands, and what moved
     sulai record .            record the next state, from draft.md
     sulai --help              everything else
 
-Nothing here is meant to be read or edited by hand, except draft.md: the next
-page, which \`sulai orient\` keeps for you to edit and \`sulai record\` records.
+After orient, draft.md is the one file here meant to be edited.
 `);
 
 export function paths(directory: string) {

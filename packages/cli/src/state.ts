@@ -296,7 +296,7 @@ export async function recordState(
       )
       .join('\n');
     throw new ValidationError(
-      `${changed.length} citation(s) kept from the parent no longer cite the same text:\n${list}\nCorrect them, or record anyway with --allow-changed-citations.`,
+      `${changed.length} citation(s) kept from the parent no longer cite the same text:\n${list}\nCorrect them, or keep them and record with --allow-changed-citations, which acknowledges that their evidence changed; it does not approve or resolve the change.`,
     );
   }
   const pageId = hashContent(bytes);
