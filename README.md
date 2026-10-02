@@ -50,7 +50,7 @@ never fetches.
 
 ## Quick start
 
-Sulai needs Node.js 24.21 or a later 24.x release, and npm 11.
+Sulai needs Node.js 24.21 or a later 24.x release, or Node.js 26, and npm 11.
 
 ```sh
 npm ci --ignore-scripts
