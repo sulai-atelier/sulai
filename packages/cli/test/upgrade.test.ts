@@ -356,15 +356,15 @@ test(
   async (t) => {
     const { directory, store } = await version5Store(t);
     const marker = join(store, 'project.json');
-    // Another process holds the marker open with no sharing, as a scanner or
-    // indexer can, and lets go after a while.
+    // Another process holds the marker open, as a scanner or indexer can:
+    // others may read it, but it cannot be replaced until the holder lets go.
     const holder = spawn(
       'powershell.exe',
       [
         '-NoProfile',
         '-NonInteractive',
         '-Command',
-        `$h = [IO.File]::Open('${marker}', 'Open', 'Read', 'None'); [Console]::Out.WriteLine('held'); [Console]::Out.Flush(); Start-Sleep -Milliseconds 1500; $h.Close()`,
+        `$h = [IO.File]::Open('${marker}', 'Open', 'Read', 'Read'); [Console]::Out.WriteLine('held'); [Console]::Out.Flush(); Start-Sleep -Milliseconds 1500; $h.Close()`,
       ],
       { stdio: ['ignore', 'pipe', 'inherit'] },
     );
