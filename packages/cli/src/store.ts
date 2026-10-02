@@ -8,6 +8,7 @@ import { constants } from 'node:fs';
 import { link, lstat, mkdir, open, rename, unlink } from 'node:fs/promises';
 import type { FileHandle } from 'node:fs/promises';
 import { join } from 'node:path';
+import process from 'node:process';
 import { setTimeout as delay } from 'node:timers/promises';
 import { parseArtifactId, ValidationError } from '@sulai/core';
 import type { ArtifactId, SkipReason } from '@sulai/core';
@@ -205,7 +206,8 @@ export async function removeTemporaryFile(path: string): Promise<void> {
  * Renames a file over another, retrying while Windows reports either one
  * locked. A scanner or indexer can hold a file just written, or the one it
  * replaces, for many seconds, so the wait is long: up to a minute, as npm
- * allows its own renames. Any other failure is thrown at once.
+ * allows its own renames. Any other failure is thrown at once, and so is every
+ * failure elsewhere, where the same codes mean a real permission problem.
  */
 export async function renameReplacing(
   from: string,
@@ -218,12 +220,10 @@ export async function renameReplacing(
       await rename(from, to);
       return;
     } catch (error) {
-      if (
-        !hasCode(error, ...TRANSIENT_UNLINK_CODES) ||
-        Date.now() - started >= budgetMs
-      ) {
-        throw error;
-      }
+      const locked =
+        process.platform === 'win32' &&
+        hasCode(error, ...TRANSIENT_UNLINK_CODES);
+      if (!locked || Date.now() - started >= budgetMs) throw error;
       await delay(Math.min(1000, 50 * 2 ** attempt));
     }
   }

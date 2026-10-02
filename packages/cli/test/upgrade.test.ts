@@ -1,7 +1,15 @@
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rm,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, relative, resolve } from 'node:path';
 import { test } from 'node:test';
@@ -16,6 +24,7 @@ import {
   recordState,
   upgradeProject,
 } from '../dist/index.js';
+import { renameReplacing } from '../dist/store.js';
 
 const cli = fileURLToPath(new URL('../dist/main.js', import.meta.url));
 
@@ -382,5 +391,31 @@ test(
     assert.equal(await readFile(marker, 'utf8'), VERSION_6);
     // It waited for the lock rather than failing at once.
     assert.ok(Date.now() - started >= 500, 'the rename should have waited');
+  },
+);
+
+test(
+  'a rename refused for lack of permission fails at once outside Windows',
+  {
+    skip:
+      (process.platform === 'win32' && 'Windows retries these codes') ||
+      (process.getuid?.() === 0 && 'root is not refused'),
+  },
+  async (t) => {
+    const base = await mkdtemp(join(tmpdir(), 'sulai-rename-'));
+    const closed = join(base, 'closed');
+    t.after(async () => {
+      await chmod(closed, 0o755);
+      await rm(base, { recursive: true, force: true });
+    });
+    const from = join(base, 'marker');
+    await writeFile(from, VERSION_6);
+    await mkdir(closed);
+    await chmod(closed, 0o555);
+    const started = Date.now();
+    await assert.rejects(renameReplacing(from, join(closed, 'marker')), {
+      code: 'EACCES',
+    });
+    assert.ok(Date.now() - started < 1000, 'the rename should not have waited');
   },
 );
